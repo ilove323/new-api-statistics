@@ -14,7 +14,8 @@ const userCell = (tr,row) => {
 };
 function selectedRows(){
   if(!snapshot)return [];
-  return snapshot.rows.filter(r=>(!$('user').value||r.username===$('user').value)&&(!$('model').value||r.model_name===$('model').value));
+  const users=selectedFilterValues('user'),models=selectedFilterValues('model');
+  return snapshot.rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
 }
 function visibleColumns(){
   return new Set([...document.querySelectorAll('[data-column-toggle]:checked')].map(input=>input.dataset.columnToggle));
@@ -35,11 +36,30 @@ function loadVisibleColumns(){
   if(!Array.isArray(saved)||!saved.length)return;
   document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=saved.includes(input.dataset.columnToggle));
 }
+function selectedFilterValues(id){
+  return new Set([...document.querySelectorAll(`#${id}-options input:checked`)].map(input=>input.value));
+}
+function updateFilterSummary(id,placeholder){
+  const selected=[...document.querySelectorAll(`#${id}-options input:checked`)];
+  const summary=$(`${id}-summary`);
+  summary.textContent=!selected.length?placeholder:selected.length===1?selected[0].dataset.label:`已选 ${selected.length} 项`;
+  summary.title=selected.map(input=>input.dataset.label).join('、');
+}
 function populateFilter(id,placeholder,values,label){
-  const select=$(id),selected=select.value;
-  select.replaceChildren(new Option(placeholder,''));
-  values.forEach(value=>select.add(new Option(label(value),value)));
-  select.value=values.includes(selected)?selected:'';
+  const options=$(`${id}-options`),selected=selectedFilterValues(id);
+  options.replaceChildren();
+  values.forEach(value=>{
+    const text=label(value),row=document.createElement('label'),input=document.createElement('input');
+    input.type='checkbox';input.value=value;input.dataset.label=text;input.checked=selected.has(value);
+    input.addEventListener('change',()=>{updateFilterSummary(id,placeholder);if(snapshot)renderDetails();});
+    row.append(input,document.createTextNode(text));options.append(row);
+  });
+  const all=document.createElement('button');all.type='button';all.textContent='全部';
+  all.addEventListener('click',()=>{
+    options.querySelectorAll('input:checked').forEach(input=>input.checked=false);
+    updateFilterSummary(id,placeholder);if(snapshot)renderDetails();
+  });
+  options.append(all);updateFilterSummary(id,placeholder);
 }
 // Browser-only diagnostics: never add fields to the API snapshot or Excel export.
 const developerMode = new URLSearchParams(window.location.search).get('dev') === '1';
@@ -167,7 +187,6 @@ document.querySelectorAll('[data-preset]').forEach(button=>button.addEventListen
 }));
 for(const id of ['start','end'])$(id).addEventListener('input',()=>document.querySelectorAll('[data-preset]').forEach(b=>b.setAttribute('aria-pressed','false')));
 $('query').addEventListener('submit',query);
-for(const id of ['user','model'])$(id).addEventListener('change',()=>snapshot&&renderDetails());
 document.querySelectorAll('[data-column-toggle]').forEach(input=>input.addEventListener('change',()=>{
   if(!document.querySelector('[data-column-toggle]:checked'))input.checked=true;
   saveVisibleColumns();applyColumnVisibility();
