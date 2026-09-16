@@ -1,7 +1,7 @@
 # Security
 
 维护者：[@ilove323](https://github.com/ilove323)。
-目前仅维护最新发布版本。首个版本发布前，修复在 main 上进行。
+目前维护最新发布版本 0.1.x，修复在 main 上进行。
 
 请勿在公开 Issue 中提交密码、令牌、数据库备份、客户数据或可直接利用的漏洞详情。
 若仓库已启用 GitHub 私密漏洞报告，请使用仓库 Security 页的 Report a vulnerability。
