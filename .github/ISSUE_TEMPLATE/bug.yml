@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a reproducible problem using sanitized data.
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Application version and New API version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected result and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and sanitized logs
+      description: Do not include passwords, keys, customer data or database dumps.

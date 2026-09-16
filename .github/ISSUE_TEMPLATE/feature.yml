@@ -1,0 +1,9 @@
+name: Feature request
+description: Describe a use case and expected behavior.
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: Problem and proposed behavior
+    validations:
+      required: true

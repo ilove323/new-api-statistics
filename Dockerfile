@@ -5,7 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home statistics
-COPY . .
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY src/ ./src/
+RUN pip install --no-cache-dir --no-deps .
 USER statistics
 EXPOSE 8000
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "2", "--timeout", "90", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "2", "--timeout", "90", "--access-logfile", "-", "new_api_statistics.app:app"]

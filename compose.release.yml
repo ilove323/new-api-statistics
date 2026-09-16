@@ -1,0 +1,34 @@
+services:
+  statistics:
+    image: ghcr.io/ilove323/new-api-statistics:${IMAGE_TAG:?Set IMAGE_TAG to a released version}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-8091}:8000"
+    networks: [new-api]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  balance-worker:
+    image: ghcr.io/ilove323/new-api-statistics:${IMAGE_TAG:?Set IMAGE_TAG to a released version}
+    command: [python, -m, new_api_statistics.balance_worker]
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      statistics:
+        condition: service_healthy
+    networks: [new-api]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+networks:
+  new-api:
+    external: true
+    name: ${NEW_API_NETWORK:-new-api-network}
