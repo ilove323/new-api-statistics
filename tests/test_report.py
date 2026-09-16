@@ -197,16 +197,16 @@ class ReportTest(unittest.TestCase):
     def test_excel_numbers_merge_formulas_and_literal_names(self):
         ws = load_workbook(export_excel(self.rows, "2026-07-26", "2026-08-25")).active
         self.assertIn("A3:A4", str(ws.merged_cells))
-        self.assertIn("C3:C4", str(ws.merged_cells))
+        self.assertIn("B3:B4", str(ws.merged_cells))
         self.assertEqual(ws["A3"].data_type, "s")
         self.assertEqual(ws["A3"].value, "=danger")
-        self.assertEqual(ws["B2"].value, "消费请求数")
-        self.assertEqual(ws["C2"].value, "显示名")
-        self.assertEqual(ws["C3"].value, "测试显示名")
+        self.assertEqual(ws["B2"].value, "显示名")
+        self.assertEqual(ws["B3"].value, "测试显示名")
+        self.assertEqual(ws["C2"].value, "消费请求数")
         self.assertEqual(ws["D3"].data_type, "s")
         self.assertEqual(ws["O3"].data_type, "n")
         self.assertEqual(ws["O5"].value, "=SUM(O3:O4)")
-        for col in "BEFGHIO":
+        for col in "CEFGHIO":
             self.assertEqual(ws[f"{col}3"].data_type, "n")
             self.assertEqual(ws[f"{col}5"].value, f"=SUM({col}3:{col}4)")
         self.assertEqual(ws.max_column, 15)
@@ -315,7 +315,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(wb["用户消费"]["D4"].value, "=SUM(D3:D3)")
         summary = wb["区间汇总"]
         self.assertEqual(summary["B4"].value, "='用户模型用量'!E5")
-        self.assertEqual(summary["B9"].value, "='用户模型用量'!B5")
+        self.assertEqual(summary["B9"].value, "='用户模型用量'!C5")
         self.assertEqual(summary["B11"].value, "=B4/B10")
         self.assertEqual(summary["B12"].value, "=B9/B10")
 

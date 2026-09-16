@@ -24,6 +24,7 @@ TOKEN_FIELDS = [
 HEADERS = [
     "用户名",
     "显示名",
+    "消费请求数",
     "模型",
     "总Token",
     "输入Token",
@@ -40,6 +41,7 @@ HEADERS = [
 FIELDS = [
     "username",
     "display_name",
+    "request_count",
     "model_name",
     "total_tokens",
     *TOKEN_FIELDS,
@@ -49,12 +51,7 @@ FIELDS = [
     "cache_price",
     "write_price",
     "amount",
-    "request_count",
 ]
-HEADERS.append("消费请求数")
-request_column = FIELDS.index("request_count")
-FIELDS.insert(1, FIELDS.pop(request_column))
-HEADERS.insert(1, HEADERS.pop(request_column))
 
 
 def convert_tokens(row):
@@ -335,11 +332,11 @@ def export_excel(rows, start, end):
         values = [r.get(f) for f in FIELDS]
         ws.append(values)
         # Treat database names literally, including strings starting with '='.
-        for col in (1, 3, 4):
+        for col in (1, 2, 4):
             ws.cell(ws.max_row, col).data_type = "s"
     last = ws.max_row
     ws.append(["总计"])
-    for col in (2, 5, 6, 7, 8, 9, 15):
+    for col in (3, 5, 6, 7, 8, 9, 15):
         letter = get_column_letter(col)
         ws.cell(last + 1, col, f"=SUM({letter}3:{letter}{last})" if rows else 0)
     begin = 3
@@ -353,21 +350,21 @@ def export_excel(rows, start, end):
                     start_row=begin, end_row=i + 2, start_column=1, end_column=1
                 )
                 ws.merge_cells(
-                    start_row=begin, end_row=i + 2, start_column=3, end_column=3
+                    start_row=begin, end_row=i + 2, start_column=2, end_column=2
                 )
             begin = i + 3
     for cells in ws.iter_rows(min_row=3):
         for c in cells:
             c.alignment = Alignment(vertical="center")
-            if c.column not in (1, 3, 4):
+            if c.column not in (1, 2, 4):
                 c.number_format = (
-                    "#,##0" if c.column in (2, 5, 6, 7, 8, 9) else "#,##0.######"
+                    "#,##0" if c.column in (3, 5, 6, 7, 8, 9) else "#,##0.######"
                 )
     for c in ws[2]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="156B59")
     for i, width in enumerate(
-        [24, 18, 24, 36, 30, 22, 22, 30, 22, 12, 24, 24, 24, 24, 22], 1
+        [24, 24, 18, 36, 30, 22, 22, 30, 22, 12, 24, 24, 24, 24, 22], 1
     ):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "E3"
@@ -448,7 +445,7 @@ def export_excel(rows, start, end):
         ("输出Token", "G"),
         ("缓存读取Token", "H"),
         ("缓存写入Token", "I"),
-        ("消费请求数", "B"),
+        ("消费请求数", "C"),
     ]:
         summary.append([title, f"='用户模型用量'!{col}{last + 1}"])
     first_second, last_second = period(start, end)
