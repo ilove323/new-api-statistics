@@ -32,9 +32,8 @@ function applyColumnVisibility(){
 function loadVisibleColumns(){
   let saved;
   try{saved=JSON.parse(localStorage.getItem(columnStorageKey));}catch{}
-  const inputs=document.querySelectorAll('[data-column-toggle]');
-  if(!Array.isArray(saved)||!saved.length){inputs.forEach(input=>input.checked=true);return;}
-  inputs.forEach(input=>input.checked=saved.includes(input.dataset.columnToggle));
+  if(!Array.isArray(saved)||!saved.length)return;
+  document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=saved.includes(input.dataset.columnToggle));
 }
 function populateFilter(id,placeholder,values,label){
   const select=$(id),selected=select.value;
