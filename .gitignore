@@ -1,0 +1,58 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+*.private
+*.private.*
+*.local
+*.local.*
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Deployment-specific files
+DEPLOYMENT.private.md
+docker-compose.override.yml
+docker-compose.override.yaml
+docker-compose.*.private.yml
+docker-compose.*.private.yaml
+
+# Python and test artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Generated data and runtime files
+*.xlsx
+*.xls
+*.csv
+*.log
+*.pid
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.backup
+test-results/
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ site_name }} · 用量统计</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='user-display.css') }}">
+  <script defer src="{{ url_for('static', filename='presets.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='money-tooltip.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='balance.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='channel.css') }}">
+  <script defer src="{{ url_for('static', filename='balance.js') }}"></script>
+</head>
+<body>
+  <header><span class="brand">{{ site_name }} <span>用量统计</span></span>
+    <div class="header-actions"><span id="updated">北京时间</span>
+      <button id="balance-bell" class="icon-button" type="button" title="余额警报" aria-label="余额警报">
+        <img src="{{ url_for('static', filename='bell.svg') }}" alt="" width="20" height="20">
+      </button>
+      <button id="balance-gear" class="icon-button" type="button" title="余额监控设置" aria-label="余额监控设置">
+        <img src="{{ url_for('static', filename='settings.svg') }}" alt="" width="20" height="20">
+      </button>
+    </div>
+  </header>
+  <main>
+    <form id="query">
+      <label>开始时间（北京时间）<input id="start" name="start" type="datetime-local" step="1" value="{{ start }}" required></label>
+      <label>结束时间（北京时间）<input id="end" name="end" type="datetime-local" step="1" value="{{ end }}" required></label>
+      <button type="submit" id="submit">查询</button>
+      <label class="user-filter">用户<select id="user"><option value="">全部用户</option></select></label>
+      <button id="export" type="button" disabled>导出 Excel</button>
+    </form>
+    <div class="presets" aria-label="快捷时间范围">
+      <button type="button" data-preset="month">上个月</button>
+      <button type="button" data-preset="30">近30天</button>
+      <button type="button" data-preset="7">近7天</button>
+      <button type="button" data-preset="1">近1天</button>
+    </div>
+    <p id="status" role="status" aria-live="polite">等待查询</p>
+    <section class="metrics" aria-label="区间汇总">
+      <div><span>消费金额</span><strong id="amount">—</strong></div>
+      <div><span>总 Token</span><strong id="total_tokens">—</strong></div>
+      <div><span>输入 Token</span><strong id="input_tokens">—</strong></div>
+      <div><span>输出 Token</span><strong id="output_tokens">—</strong></div>
+      <div><span>缓存读取 Token</span><strong id="cache_read_tokens">—</strong></div>
+      <div><span>缓存写入 Token</span><strong id="cache_write_tokens">—</strong></div>
+      <div><span>区间平均 TPM</span><strong id="tpm">—</strong></div>
+      <div><span>区间平均 RPM</span><strong id="rpm">—</strong></div>
+      <div><span>用户 / 模型</span><strong id="counts">—</strong></div>
+    </section>
+    <section class="chart-section">
+      <div class="ranking-tabs" role="tablist" aria-label="用量排序">
+        <button id="tab-model" role="tab" type="button" data-ranking="model_amount" aria-selected="true" aria-controls="chart">模型消费</button>
+        <button id="tab-token" role="tab" type="button" data-ranking="user_tokens" aria-selected="false" aria-controls="chart" tabindex="-1">用户 Token</button>
+        <button id="tab-amount" role="tab" type="button" data-ranking="user_amount" aria-selected="false" aria-controls="chart" tabindex="-1">用户消费</button>
+      </div>
+      <div id="chart" role="tabpanel" aria-labelledby="tab-model"></div>
+    </section>
+    <section><div class="table-heading"><h2>用户模型明细</h2><span>价格单位：元 / 百万 Token</span></div>
+      <div class="table-wrap" tabindex="0" aria-label="用户模型用量表，可横向滚动">
+        <table><thead><tr><th>用户名</th><th>消费请求数</th><th>模型</th><th>总 Token</th><th>输入 Token</th><th>输出 Token</th><th>缓存读取 Token</th><th>缓存写入 Token</th><th>最后倍率</th><th>输入价格</th><th>输出价格</th><th>缓存读价格</th><th>缓存写价格</th><th>消费金额</th></tr></thead><tbody id="rows"></tbody><tfoot id="totals"></tfoot></table>
+      </div>
+    </section>
+  </main>
+  <dialog id="balance-settings" class="balance-dialog" aria-labelledby="balance-settings-title">
+    <h2 id="balance-settings-title">余额监控设置</h2>
+    <form id="balance-form">
+      <label class="balance-toggle"><input id="balance-enabled" type="checkbox">启用余额监控</label>
+      <label>总额度（元）<input id="balance-budget" type="number" min="0" max="999999999999" step="0.01" required></label>
+      <label>剩余额度报警阈值（元）<input id="balance-threshold" type="number" min="0" max="999999999999" step="0.01" required></label>
+      <label>累计起始月份（北京时间）<input id="balance-start" type="month" required></label>
+      <p id="balance-settings-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="balance-save" type="submit">保存额度设置</button></div>
+    </form>
+    <h3>报警渠道</h3>
+    <form id="channel-form">
+      <label class="balance-toggle"><input id="channel-enabled" type="checkbox">启用渠道通知</label>
+      <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_app">钉钉企业内部应用</option></select></label>
+      <label><span id="channel-app-id-label">App ID</span><input id="channel-app-id" type="text" maxlength="512" autocomplete="off"></label>
+      <label><span id="channel-secret-label">App Secret</span><input id="channel-secret" type="password" maxlength="512" autocomplete="new-password"></label>
+      <label id="channel-robot-code-field" hidden>Robot Code<input id="channel-robot-code" type="text" maxlength="512" autocomplete="off"></label>
+      <label>接收目标<select id="channel-receive-type"><option value="chat_id">群聊（chat_id）</option><option value="user_id">个人（user_id）</option></select></label>
+      <label><span id="channel-receive-id-label">接收目标 ID</span><input id="channel-receive-id" type="text" maxlength="512" autocomplete="off"></label>
+      <p id="channel-status" role="status"></p>
+      <div class="dialog-actions"><button id="channel-test" type="button" disabled>发送测试消息</button><button id="channel-save" type="submit" disabled>保存渠道</button></div>
+    </form>
+  </dialog>
+  <dialog id="balance-alerts" class="balance-dialog balance-wide" aria-labelledby="balance-alerts-title">
+    <div class="dialog-heading"><h2 id="balance-alerts-title">余额与警报</h2><button type="button" data-close="balance-alerts">关闭</button></div>
+    <p id="balance-status" role="status"></p>
+    <dl id="balance-summary"></dl>
+    <h3>警报记录</h3><div id="balance-alert-list"></div>
+    <h3>月度消费归档</h3>
+    <div class="balance-table"><table><thead><tr><th>月份（北京时间）</th><th>消费金额（元）</th></tr></thead><tbody id="balance-months"></tbody></table></div>
+  </dialog>
+</body>
+</html>

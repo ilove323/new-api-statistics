@@ -1,0 +1,45 @@
+services:
+  statistics:
+    image: new-api-statistics:local
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-8091}:8000"
+    networks:
+      - new-api
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  balance-worker:
+    image: new-api-statistics:local
+    command: [python, balance_worker.py]
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      statistics:
+        condition: service_healthy
+    networks:
+      - new-api
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+networks:
+  new-api:
+    external: true
+    name: ${NEW_API_NETWORK:-new-api-network}

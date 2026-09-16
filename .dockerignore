@@ -1,0 +1,9 @@
+.env
+.env.*
+DEPLOYMENT.private.md
+docker-compose.override.yml
+.venv
+__pycache__
+tests
+test-results
+*.xlsx
