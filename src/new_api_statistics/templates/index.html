@@ -28,8 +28,6 @@
       <label>开始时间（北京时间）<input id="start" name="start" type="datetime-local" step="1" value="{{ start }}" required></label>
       <label>结束时间（北京时间）<input id="end" name="end" type="datetime-local" step="1" value="{{ end }}" required></label>
       <button type="submit" id="submit">查询</button>
-      <label class="user-filter">用户<select id="user"><option value="">全部用户</option></select></label>
-      <label class="model-filter">模型<select id="model"><option value="">全部模型</option></select></label>
       <button id="export" type="button" disabled>导出 Excel</button>
     </form>
     <div class="presets" aria-label="快捷时间范围">
@@ -59,6 +57,8 @@
       <div id="chart" role="tabpanel" aria-labelledby="tab-model"></div>
     </section>
     <section><div class="table-heading"><h2>用户模型明细</h2><div class="detail-controls">
+      <label class="detail-filter">用户<select id="user"><option value="">全部用户</option></select></label>
+      <label class="detail-filter">模型<select id="model"><option value="">全部模型</option></select></label>
       <span>价格单位：元 / 百万 Token</span>
       <details class="column-picker"><summary>显示列</summary><div class="column-menu" aria-label="选择明细表显示列">
         <label><input type="checkbox" data-column-toggle="username" checked>用户名</label>

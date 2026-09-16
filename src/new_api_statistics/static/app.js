@@ -1,4 +1,4 @@
-/* Fetch one database aggregate and filter the snapshot locally by user and model. */
+/* Fetch one database aggregate; user and model filters only affect the detail table. */
 const $ = id => document.getElementById(id);
 let snapshot = null;
 let ranking = 'model_amount';
@@ -56,17 +56,24 @@ function developerCells(tr,row){
   const tokens=Number(row.total_tokens);
   cell(tr,tokens>0?number(Number(row.amount)/tokens*1000000,6):'—','','amount_per_million');
 }
-function render() {
-  hideMoneyTooltip();
-  const data=selectedRows();
+function sumRows(data) {
   const total={amount:0,request_count:0,...Object.fromEntries(tokenFields.map(k=>[k,0]))};
   data.forEach(r=>{total.amount+=Number(r.amount);total.request_count+=Number(r.request_count);tokenFields.forEach(k=>total[k]+=Number(r[k]));});
+  return total;
+}
+function renderSummary(data) {
+  const total=sumRows(data);
   $('amount').textContent='¥ '+number(total.amount,2);
   tokenFields.forEach(k=>$(k).textContent=number(total[k],0));
   const seconds=Number(snapshot.totals.duration_seconds);
   $('tpm').textContent=number(total.total_tokens*60/seconds,2);
   $('rpm').textContent=number(total.request_count*60/seconds,4);
   $('counts').textContent=`${new Set(data.map(r=>r.user_id)).size} / ${new Set(data.map(r=>r.model_name)).size}`;
+}
+function renderDetails() {
+  hideMoneyTooltip();
+  const data=selectedRows();
+  const total=sumRows(data);
   $('rows').replaceChildren();$('totals').replaceChildren();
   for(let i=0;i<data.length;i++) {
     const r=data[i],tr=document.createElement('tr');
@@ -89,6 +96,11 @@ function render() {
   developerCells(tr,total);
   $('totals').append(tr);
   applyColumnVisibility();
+}
+function render() {
+  const data=snapshot.rows;
+  renderSummary(data);
+  renderDetails();
   renderRanking(data);
   $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${data.length} 条用户模型汇总`;
   if(data.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
@@ -155,12 +167,12 @@ document.querySelectorAll('[data-preset]').forEach(button=>button.addEventListen
 }));
 for(const id of ['start','end'])$(id).addEventListener('input',()=>document.querySelectorAll('[data-preset]').forEach(b=>b.setAttribute('aria-pressed','false')));
 $('query').addEventListener('submit',query);
-for(const id of ['user','model'])$(id).addEventListener('change',()=>snapshot&&render());
+for(const id of ['user','model'])$(id).addEventListener('change',()=>snapshot&&renderDetails());
 document.querySelectorAll('[data-column-toggle]').forEach(input=>input.addEventListener('change',()=>{
   if(!document.querySelector('[data-column-toggle]:checked'))input.checked=true;
   saveVisibleColumns();applyColumnVisibility();
 }));
 $('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
-$('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end,user:$('user').value,model:$('model').value}));});
+$('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end}));});
 loadVisibleColumns();applyColumnVisibility();
 query();
