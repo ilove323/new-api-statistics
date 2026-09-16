@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add combined user and model filters to reports and Excel exports.
+- Add persistent column visibility controls to the user-model detail table.
+
 ## 0.1.0 - 2026-09-17
 
 First release. Requires an existing New API installation backed by PostgreSQL.

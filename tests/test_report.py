@@ -342,7 +342,7 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(books[0], books[1])
             self.assertEqual(books[0], books[2])
 
-    def test_auth_and_user_filter(self):
+    def test_auth_and_user_model_filters(self):
         with patch(
             "new_api_statistics.app.verify_admin",
             side_effect=lambda u, p: u == "test_admin" and p == "testing",
@@ -365,6 +365,20 @@ class ReportTest(unittest.TestCase):
                 )
                 self.assertEqual(response.json["rows"], [])
                 self.assertEqual(response.json["totals"]["rpm"], "0")
+                response = client.get(
+                    "/statistics/api/usage?model=gpt-b&start=2026-07-26&end=2026-08-25",
+                    auth=("test_admin", "testing"),
+                )
+                self.assertEqual(len(response.json["rows"]), 1)
+                self.assertEqual(response.json["rows"][0]["model_name"], "gpt-b")
+                self.assertEqual(response.json["totals"]["amount"], "1")
+                response = client.get(
+                    "/statistics/api/export?user=%3Ddanger&model=claude-a&start=2026-07-26&end=2026-08-25",
+                    auth=("test_admin", "testing"),
+                )
+                workbook = load_workbook(BytesIO(response.data))
+                self.assertEqual(workbook.active["D3"].value, "claude-a")
+                self.assertEqual(workbook.active.max_row, 4)
             self.assertEqual(
                 client.get("/statistics/", auth=("admin", "testing")).status_code, 401
             )

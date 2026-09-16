@@ -91,6 +91,9 @@ def selected():
     user = request.args.get("user", "").strip()
     if user:
         rows = [r for r in rows if r["username"] == user]
+    model = request.args.get("model", "").strip()
+    if model:
+        rows = [r for r in rows if r["model_name"] == model]
     return start, end, rows
 
 
