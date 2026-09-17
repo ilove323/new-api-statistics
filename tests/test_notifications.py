@@ -1,4 +1,4 @@
-"""Run with unittest discovery; all Feishu requests are mocked, never sent."""
+"""Run with unittest discovery; all notification requests are mocked, never sent."""
 
 import json
 import io
@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from new_api_statistics import notifications
 from new_api_statistics import balance
 from new_api_statistics.notification_channels import feishu_app as feishu
-from new_api_statistics.notification_channels import dingtalk_app as dingtalk
+from new_api_statistics.notification_channels import dingtalk_webhook as dingtalk
 from new_api_statistics.notification_channels.base import DeliveryError
 from new_api_statistics.app import app
 from new_api_statistics.report import TZ
@@ -21,7 +21,6 @@ from new_api_statistics.report import TZ
 class NotificationsTest(unittest.TestCase):
     def setUp(self):
         feishu._tokens.clear()
-        dingtalk._tokens.clear()
         self.config = dict(
             app_id="cli_example", receive_id_type="chat_id", receive_id="oc_example"
         )
@@ -104,7 +103,6 @@ class NotificationsTest(unittest.TestCase):
             enabled=True,
             channel="feishu_app",
             active_channel="feishu_app",
-            robot_code="",
             **self.config,
             last_attempt_at=None,
             last_success_at=None,
@@ -117,40 +115,62 @@ class NotificationsTest(unittest.TestCase):
         self.assertNotIn("secret_encrypted", output)
         self.assertNotIn("unexpected_secret", output)
 
+        webhook = notifications.public(
+            dict(
+                version=2,
+                enabled=False,
+                channel="dingtalk_webhook",
+                active_channel="dingtalk_webhook",
+                webhook_encrypted="encrypted-webhook",
+                secret_encrypted="encrypted-signing-secret",
+                signing_enabled=True,
+                last_attempt_at=None,
+                last_success_at=None,
+                last_error=None,
+            )
+        )
+        self.assertTrue(webhook["webhook_configured"])
+        self.assertTrue(webhook["signing_secret_configured"])
+        self.assertNotIn("webhook_encrypted", webhook)
+        self.assertNotIn("secret_encrypted", webhook)
+
     def test_dingtalk_validation_and_send(self):
         config = dict(
-            app_id="ding-example",
-            robot_code="robot-example",
-            receive_id_type="open_conversation_id",
-            receive_id="cidExample123",
+            webhook_url="https://oapi.dingtalk.com/robot/send?access_token=fixture-token",
+            signing_enabled=True,
         )
         dingtalk.validate(config, "fixture-secret")
         for invalid in [
-            dict(config, app_id=""),
-            dict(config, robot_code=""),
-            dict(config, receive_id_type="chat_id"),
-            dict(config, receive_id=""),
+            dict(config, webhook_url=""),
+            dict(config, webhook_url="https://example.com/robot/send?access_token=x"),
+            dict(config, webhook_url="https://oapi.dingtalk.com/other?access_token=x"),
+            dict(config, webhook_url="https://oapi.dingtalk.com/robot/send"),
+            dict(config, signing_enabled="true"),
         ]:
             with self.assertRaises(ValueError):
                 dingtalk.validate(invalid, "fixture-secret")
-        token = dict(accessToken="fixture-token", expireIn=7200)
-        with patch.object(dingtalk, "_post", side_effect=[token, {}, {}]) as post:
+        with self.assertRaises(ValueError):
+            dingtalk.validate(config, "")
+        with (
+            patch.object(dingtalk, "_post") as post,
+            patch.object(dingtalk.time, "time", return_value=1234.5),
+        ):
             dingtalk.send(config, "fixture-secret", "余额不足")
-            dingtalk.send(config, "fixture-secret", "第二次")
-            self.assertEqual(post.call_count, 3)
-            path, body, auth = post.call_args_list[1].args
-            self.assertEqual(path, "/v1.0/robot/groupMessages/send")
-            self.assertEqual(auth, "fixture-token")
-            self.assertEqual(body["robotCode"], "robot-example")
-            self.assertEqual(body["openConversationId"], "cidExample123")
-            self.assertEqual(json.loads(body["msgParam"]), {"content": "余额不足"})
+            url, body = post.call_args.args
+            query = dict(dingtalk.parse.parse_qsl(dingtalk.parse.urlsplit(url).query))
+            self.assertEqual(query["access_token"], "fixture-token")
+            self.assertEqual(query["timestamp"], "1234500")
+            self.assertTrue(query["sign"])
+            self.assertEqual(body, {"msgtype": "text", "text": {"content": "余额不足"}})
+        unsigned = dict(config, signing_enabled=False)
+        with patch.object(dingtalk, "_post") as post:
+            dingtalk.send(unsigned, "", "第二次")
+            self.assertEqual(post.call_args.args[0], unsigned["webhook_url"])
 
     def test_dingtalk_error_is_sanitized(self):
-        payload = json.dumps(
-            {"code": "InvalidAuthentication", "message": "fixture-secret"}
-        ).encode()
+        payload = json.dumps({"errcode": 310000, "errmsg": "fixture-secret"}).encode()
         error = HTTPError(
-            "https://api.dingtalk.com/example",
+            "https://oapi.dingtalk.com/robot/send?access_token=fixture-token",
             401,
             "Unauthorized",
             {},
@@ -159,9 +179,13 @@ class NotificationsTest(unittest.TestCase):
         with patch.object(dingtalk.request, "build_opener") as opener:
             opener.return_value.open.side_effect = error
             with self.assertRaises(DeliveryError) as caught:
-                dingtalk._post("/example", {})
-        self.assertIn("InvalidAuthentication", str(caught.exception))
+                dingtalk._post(
+                    "https://oapi.dingtalk.com/robot/send?access_token=fixture-token",
+                    {},
+                )
+        self.assertIn("310000", str(caught.exception))
         self.assertNotIn("fixture-secret", str(caught.exception))
+        self.assertNotIn("fixture-token", str(caught.exception))
 
     def test_http_business_error_is_not_reported_as_network_failure(self):
         payload = json.dumps({"code": 99991672, "msg": "fixture-secret"}).encode()

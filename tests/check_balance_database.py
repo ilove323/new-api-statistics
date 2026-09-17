@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 from new_api_statistics import balance
 from new_api_statistics import notifications
 from cryptography.fernet import Fernet
-from new_api_statistics.notification_channels import feishu_app
+from new_api_statistics.notification_channels import dingtalk_webhook, feishu_app
 from new_api_statistics.notification_channels.base import DeliveryError
 from new_api_statistics.report import TZ
 
@@ -240,7 +240,6 @@ def main():
                     channel="feishu_app",
                     app_id="cli_fixture",
                     app_secret="fixture-secret",
-                    robot_code="",
                     receive_id_type="user_id",
                     receive_id="employee123",
                 )
@@ -272,13 +271,19 @@ def main():
                         & columns
                     )
                     assert conn.execute(
-                        "SELECT client_id,robot_code,open_conversation_id "
-                        "FROM notification_dingtalk_settings WHERE id=1"
+                        "SELECT webhook_encrypted,secret_encrypted,signing_enabled "
+                        "FROM notification_dingtalk_webhook_settings WHERE id=1"
                     ).fetchone() == {
-                        "client_id": "",
-                        "robot_code": "",
-                        "open_conversation_id": "",
+                        "webhook_encrypted": "",
+                        "secret_encrypted": "",
+                        "signing_enabled": False,
                     }
+                    assert (
+                        conn.execute(
+                            "SELECT to_regclass('notification_dingtalk_settings') AS name"
+                        ).fetchone()["name"]
+                        is None
+                    )
                 notifications.save(
                     dict(config, version=2, app_secret=""), "fixture_admin"
                 )
@@ -348,6 +353,38 @@ def main():
                 assert migrated["version"] == 5
                 balance.initialize()
                 assert notifications.snapshot()["version"] == 5
+                webhook = (
+                    "https://oapi.dingtalk.com/robot/send?access_token=fixture-token"
+                )
+                notifications.save(
+                    dict(
+                        version=5,
+                        enabled=True,
+                        channel="dingtalk_webhook",
+                        webhook_url=webhook,
+                        signing_enabled=True,
+                        signing_secret="fixture-signing-secret",
+                    ),
+                    "fixture_admin",
+                )
+                result = notifications.snapshot()
+                assert result["webhook_configured"]
+                assert result["signing_secret_configured"]
+                assert "webhook_encrypted" not in result
+                with connect() as conn:
+                    stored = conn.execute(
+                        "SELECT webhook_encrypted,secret_encrypted "
+                        "FROM notification_dingtalk_webhook_settings WHERE id=1"
+                    ).fetchone()
+                assert notifications.decrypt(stored["webhook_encrypted"]) == webhook
+                assert (
+                    notifications.decrypt(stored["secret_encrypted"])
+                    == "fixture-signing-secret"
+                )
+                with patch.object(dingtalk_webhook, "send") as ding_send:
+                    notifications.deliver(test=True, expected_version=6)
+                assert ding_send.call_args.args[0]["webhook_url"] == webhook
+                assert ding_send.call_args.args[1] == "fixture-signing-secret"
             print(
                 "PASS: encrypted credentials, secret retention, stale versions, test delivery, failures, recovery"
             )

@@ -100,12 +100,18 @@
     <h3>报警渠道</h3>
     <form id="channel-form">
       <label class="balance-toggle"><input id="channel-enabled" type="checkbox">启用渠道通知</label>
-      <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_app">钉钉企业内部应用</option></select></label>
-      <label><span id="channel-app-id-label">App ID</span><input id="channel-app-id" type="text" maxlength="512" autocomplete="off"></label>
-      <label><span id="channel-secret-label">App Secret</span><input id="channel-secret" type="password" maxlength="512" autocomplete="new-password"></label>
-      <label id="channel-robot-code-field" hidden>Robot Code<input id="channel-robot-code" type="text" maxlength="512" autocomplete="off"></label>
-      <label>接收目标<select id="channel-receive-type"><option value="chat_id">群聊（chat_id）</option><option value="user_id">个人（user_id）</option></select></label>
-      <label><span id="channel-receive-id-label">接收目标 ID</span><input id="channel-receive-id" type="text" maxlength="512" autocomplete="off"></label>
+      <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_webhook">钉钉自定义 Webhook 机器人</option></select></label>
+      <div id="channel-feishu-fields" class="channel-provider-fields">
+        <label>App ID<input id="channel-app-id" type="text" maxlength="512" autocomplete="off"></label>
+        <label>App Secret<input id="channel-secret" type="password" maxlength="512" autocomplete="new-password"></label>
+        <label>接收目标<select id="channel-receive-type"><option value="chat_id">群聊（chat_id）</option><option value="user_id">个人（user_id）</option></select></label>
+        <label>接收目标 ID<input id="channel-receive-id" type="text" maxlength="512" autocomplete="off"></label>
+      </div>
+      <div id="channel-dingtalk-fields" class="channel-provider-fields" hidden>
+        <label>Webhook URL<input id="channel-webhook-url" type="password" maxlength="2048" autocomplete="new-password"></label>
+        <label class="balance-toggle"><input id="channel-signing-enabled" type="checkbox">启用加签</label>
+        <label id="channel-signing-secret-field">加签密钥<input id="channel-signing-secret" type="password" maxlength="512" autocomplete="new-password"></label>
+      </div>
       <p id="channel-status" role="status"></p>
       <div class="dialog-actions"><button id="channel-test" type="button" disabled>发送测试消息</button><button id="channel-save" type="submit" disabled>保存渠道</button></div>
     </form>

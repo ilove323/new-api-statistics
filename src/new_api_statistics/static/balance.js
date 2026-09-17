@@ -47,7 +47,7 @@ function refreshBalance(live=$('balance-alerts').open){
 }
 $('balance-gear').addEventListener('click',async()=>{
   $('balance-settings').showModal();$('balance-save').disabled=true;$('balance-settings-status').textContent='正在读取设置…';
-  channelVersion=null;channelDirty=false;$('channel-secret').value='';channelButtons();
+  channelVersion=null;channelDirty=false;$('channel-secret').value='';$('channel-webhook-url').value='';$('channel-signing-secret').value='';channelButtons();
   $('channel-status').textContent='正在读取渠道配置…';
   try{
     const data=await refreshBalance();
@@ -78,20 +78,16 @@ $('balance-form').addEventListener('submit',async event=>{
   finally{$('balance-save').disabled=false;}
 });
 function channelButtons(){
-  for(const id of ['channel-enabled','channel-type','channel-app-id','channel-secret','channel-robot-code','channel-receive-type','channel-receive-id']){
+  for(const id of ['channel-enabled','channel-type','channel-app-id','channel-secret','channel-receive-type','channel-receive-id','channel-webhook-url','channel-signing-enabled','channel-signing-secret']){
     $(id).disabled=channelBusy||channelVersion===null;
   }
   $('channel-save').disabled=channelBusy||channelVersion===null;
   $('channel-test').disabled=channelBusy||channelVersion===null||channelDirty;
 }
 function channelFields(channel,receiveType){
-  const dingtalk=channel==='dingtalk_app';
-  $('channel-app-id-label').textContent=dingtalk?'Client ID':'App ID';
-  $('channel-secret-label').textContent=dingtalk?'Client Secret':'App Secret';
-  $('channel-robot-code-field').hidden=!dingtalk;
-  $('channel-receive-id-label').textContent=dingtalk?'openConversationId':'接收目标 ID';
-  const options=dingtalk?[['open_conversation_id','群聊（openConversationId）']]:
-    [['chat_id','群聊（chat_id）'],['user_id','个人（user_id）']];
+  const dingtalk=channel==='dingtalk_webhook';
+  $('channel-feishu-fields').hidden=dingtalk;$('channel-dingtalk-fields').hidden=!dingtalk;
+  const options=[['chat_id','群聊（chat_id）'],['user_id','个人（user_id）']];
   $('channel-receive-type').replaceChildren(...options.map(([value,label])=>new Option(label,value)));
   if(options.some(([value])=>value===receiveType))$('channel-receive-type').value=receiveType;
 }
@@ -99,10 +95,13 @@ function renderChannel(data){
   channelVersion=data.version;channelDirty=data.channel!==data.active_channel;
   $('channel-enabled').checked=data.enabled;$('channel-type').value=data.channel;
   channelFields(data.channel,data.receive_id_type);
-  $('channel-app-id').value=data.app_id;$('channel-secret').value='';
-  $('channel-robot-code').value=data.robot_code||'';
+  $('channel-app-id').value=data.app_id||'';$('channel-secret').value='';
   $('channel-secret').placeholder=data.secret_configured?'已保存；留空保持不变':'未配置';
-  $('channel-receive-type').value=data.receive_id_type;$('channel-receive-id').value=data.receive_id;
+  $('channel-receive-type').value=data.receive_id_type||'chat_id';$('channel-receive-id').value=data.receive_id||'';
+  $('channel-webhook-url').value='';$('channel-webhook-url').placeholder=data.webhook_configured?'已保存；留空保持不变':'未配置';
+  $('channel-signing-enabled').checked=Boolean(data.signing_enabled);$('channel-signing-secret').value='';
+  $('channel-signing-secret').placeholder=data.signing_secret_configured?'已保存；留空保持不变':'未配置';
+  $('channel-signing-secret-field').hidden=!$('channel-signing-enabled').checked;
   $('channel-status').textContent=data.last_error?`最近发送失败：${data.last_error}`:
     data.last_success_at?`最近发送成功：${balanceTime(data.last_success_at)}`:'';
   channelButtons();
@@ -117,17 +116,19 @@ $('channel-type').addEventListener('change',async()=>{
   channelBusy=false;channelButtons();
 });
 $('channel-form').addEventListener('input',()=>{channelDirty=true;channelButtons();});
+$('channel-signing-enabled').addEventListener('change',()=>{$('channel-signing-secret-field').hidden=!$('channel-signing-enabled').checked;});
 $('channel-form').addEventListener('submit',async event=>{
   event.preventDefault();if(channelBusy)return;
   channelBusy=true;channelButtons();$('channel-status').textContent='正在保存渠道…';
-  const fields=['channel-enabled','channel-type','channel-app-id','channel-secret','channel-robot-code','channel-receive-type','channel-receive-id'];
+  const fields=['channel-enabled','channel-type','channel-app-id','channel-secret','channel-receive-type','channel-receive-id','channel-webhook-url','channel-signing-enabled','channel-signing-secret'];
   fields.forEach(id=>$(id).disabled=true);
   try{
-    const data=await balanceRequest('/channel',balanceWrite('PUT',{
-      version:channelVersion,enabled:$('channel-enabled').checked,channel:$('channel-type').value,
-      app_id:$('channel-app-id').value,app_secret:$('channel-secret').value,
-      robot_code:$('channel-robot-code').value,
-      receive_id_type:$('channel-receive-type').value,receive_id:$('channel-receive-id').value}));
+    const body={version:channelVersion,enabled:$('channel-enabled').checked,channel:$('channel-type').value};
+    if(body.channel==='dingtalk_webhook')Object.assign(body,{webhook_url:$('channel-webhook-url').value,
+      signing_enabled:$('channel-signing-enabled').checked,signing_secret:$('channel-signing-secret').value});
+    else Object.assign(body,{app_id:$('channel-app-id').value,app_secret:$('channel-secret').value,
+      receive_id_type:$('channel-receive-type').value,receive_id:$('channel-receive-id').value});
+    const data=await balanceRequest('/channel',balanceWrite('PUT',body));
     renderChannel(data);$('channel-status').textContent='渠道已保存。';
   }catch(e){$('channel-status').textContent=e.message;}
   finally{channelBusy=false;fields.forEach(id=>$(id).disabled=false);channelButtons();}

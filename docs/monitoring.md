@@ -63,7 +63,7 @@ docker compose logs --tail=50 balance-worker
 
 首次启动后，应用会自动创建监控表。可使用 PostgreSQL 管理员验证，正常应能看到
 `balance_*`、`notification_settings`、`notification_feishu_settings` 和
-`notification_dingtalk_settings` 等表：
+`notification_dingtalk_webhook_settings` 等表：
 
 ```bash
 docker exec <PostgreSQL容器名> sh -lc \

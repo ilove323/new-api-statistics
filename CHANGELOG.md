@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replace DingTalk enterprise application delivery with an encrypted custom Webhook robot configuration.
 - Add multi-select user and model filters scoped to the user-model detail table.
 - Add persistent column visibility controls to the user-model detail table.
 

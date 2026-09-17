@@ -66,6 +66,15 @@ def main():
                     assert not conn.execute("""SELECT 1 FROM information_schema.columns
                         WHERE table_schema=current_schema() AND table_name='notification_settings'
                         AND column_name='secret_encrypted'""").fetchone()
+                assert conn.execute(
+                    "SELECT to_regclass('notification_dingtalk_webhook_settings') AS name"
+                ).fetchone()["name"]
+                assert (
+                    conn.execute(
+                        "SELECT to_regclass('notification_dingtalk_settings') AS name"
+                    ).fetchone()["name"]
+                    is None
+                )
         finally:
             with psycopg.connect(dsn) as conn:
                 conn.execute(
