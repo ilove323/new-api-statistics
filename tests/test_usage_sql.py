@@ -36,6 +36,8 @@ class UsageSQLTest(unittest.TestCase):
                         created_at=index,
                         user_id=1,
                         username="fixture",
+                        token_id=10,
+                        token_name="fixture-key",
                         model_name=model,
                         quota=100,
                         prompt_tokens=p,
@@ -46,7 +48,8 @@ class UsageSQLTest(unittest.TestCase):
                 )
         prefix = """WITH logs AS (
             SELECT * FROM jsonb_to_recordset(%(fixtures)s::jsonb) AS r(
-                id bigint, created_at bigint, user_id bigint, username text, model_name text,
+                id bigint, created_at bigint, user_id bigint, username text,
+                token_id bigint, token_name text, model_name text,
                 quota bigint, prompt_tokens bigint, completion_tokens bigint, other text, type int)
         ), source AS MATERIALIZED ("""
         query = SQL.replace("WITH source AS MATERIALIZED (", prefix, 1)
@@ -56,7 +59,15 @@ class UsageSQLTest(unittest.TestCase):
             options="-c default_transaction_read_only=on -c statement_timeout=10000",
         ) as conn:
             rows = conn.execute(
-                query, dict(fixtures=json.dumps(fixtures), start=0, end=10)
+                query,
+                dict(
+                    fixtures=json.dumps(fixtures),
+                    start=0,
+                    end=10,
+                    by_token=False,
+                    token_ids=None,
+                    groups=None,
+                ),
             ).fetchall()
         by_model = {row["model_name"]: row for row in rows}
         for model, _, p, c, cr, cw, clean, total in cases:
@@ -68,6 +79,64 @@ class UsageSQLTest(unittest.TestCase):
             self.assertEqual(row["total_tokens"], total * 3)
             self.assertEqual(float(row["group_ratio"]), 3.4)
             self.assertEqual(row["ratio_count"], 2)
+
+    def test_optional_token_dimension_keeps_same_names_separate(self):
+        fixtures = [
+            dict(
+                id=token_id,
+                created_at=token_id,
+                user_id=1,
+                username="fixture",
+                token_id=token_id,
+                token_name="same-name",
+                model_name="gpt",
+                quota=500000,
+                prompt_tokens=100 * token_id,
+                completion_tokens=0,
+                other="{}",
+                type=2,
+            )
+            for token_id in (1, 2)
+        ]
+        prefix = """WITH logs AS (
+            SELECT * FROM jsonb_to_recordset(%(fixtures)s::jsonb) AS r(
+                id bigint, created_at bigint, user_id bigint, username text,
+                token_id bigint, token_name text, model_name text,
+                quota bigint, prompt_tokens bigint, completion_tokens bigint, other text, type int)
+        ), source AS MATERIALIZED ("""
+        query = SQL.replace("WITH source AS MATERIALIZED (", prefix, 1)
+        with psycopg.connect(
+            connect_timeout=8,
+            row_factory=dict_row,
+            options="-c default_transaction_read_only=on -c statement_timeout=10000",
+        ) as conn:
+            split = conn.execute(
+                query,
+                dict(
+                    fixtures=json.dumps(fixtures),
+                    start=0,
+                    end=10,
+                    by_token=True,
+                    token_ids=None,
+                    groups=None,
+                ),
+            ).fetchall()
+            merged = conn.execute(
+                query,
+                dict(
+                    fixtures=json.dumps(fixtures),
+                    start=0,
+                    end=10,
+                    by_token=False,
+                    token_ids=None,
+                    groups=None,
+                ),
+            ).fetchall()
+        self.assertEqual([row["token_id"] for row in split], [1, 2])
+        self.assertEqual([row["token_name"] for row in split], ["same-name"] * 2)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["token_id"], 0)
+        self.assertEqual(merged[0]["total_tokens"], 300)
 
 
 if __name__ == "__main__":

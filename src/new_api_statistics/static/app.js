@@ -1,6 +1,11 @@
 /* Fetch one database aggregate; user and model filters only affect the detail table. */
 const $ = id => document.getElementById(id);
 let snapshot = null;
+let tokenSnapshot = null;
+let tokenOptions = [];
+let groupOptions = [];
+let filteredSelectionSnapshot = null;
+let detailMode = 'summary';
 let ranking = 'model_amount';
 const tokenFields = ['total_tokens','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'];
 const detailColumns = ['username','request_count','model_name',...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount'];
@@ -15,7 +20,9 @@ const userCell = (tr,row) => {
 function selectedRows(){
   if(!snapshot)return [];
   const users=selectedFilterValues('user'),models=selectedFilterValues('model');
-  return snapshot.rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
+  const selected=selectedFilterValues('token').size||selectedFilterValues('group').size;
+  const rows=selected?(filteredSelectionSnapshot?.rows||[]):detailMode==='token'?(tokenSnapshot?.rows||[]):snapshot.rows;
+  return rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
 }
 function visibleColumns(){
   return new Set([...document.querySelectorAll('[data-column-toggle]:checked')].map(input=>input.dataset.columnToggle));
@@ -28,7 +35,8 @@ function applyColumnVisibility(){
   document.querySelectorAll('#usage-table [data-column]').forEach(element=>{
     if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column);
   });
-  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,(visible.size+(developerMode?2:0))*115)+'px');
+  document.querySelectorAll('#usage-table [data-token-column]').forEach(element=>element.hidden=detailMode!=='token');
+  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,(visible.size+(detailMode==='token'?1:0)+(developerMode?2:0))*115)+'px');
 }
 function loadVisibleColumns(){
   let saved;
@@ -45,21 +53,47 @@ function updateFilterSummary(id,placeholder){
   summary.textContent=!selected.length?placeholder:selected.length===1?selected[0].dataset.label:`已选 ${selected.length} 项`;
   summary.title=selected.map(input=>input.dataset.label).join('、');
 }
-function populateFilter(id,placeholder,values,label){
+function populateFilter(id,placeholder,values,label,change=()=>{if(snapshot)renderDetails();}){
   const options=$(`${id}-options`),selected=selectedFilterValues(id);
   options.replaceChildren();
+  const search=document.createElement('input');
+  search.type='search';search.className='filter-search';search.placeholder='输入关键字筛选';search.autocomplete='off';search.setAttribute('aria-label',`筛选${placeholder.replace('全部','')}`);
+  options.append(search);
   values.forEach(value=>{
     const text=label(value),row=document.createElement('label'),input=document.createElement('input');
     input.type='checkbox';input.value=value;input.dataset.label=text;input.checked=selected.has(value);
-    input.addEventListener('change',()=>{updateFilterSummary(id,placeholder);if(snapshot)renderDetails();});
+    input.addEventListener('change',()=>{updateFilterSummary(id,placeholder);change();});
     row.append(input,document.createTextNode(text));options.append(row);
   });
+  const empty=document.createElement('p');empty.className='filter-empty';empty.textContent='无匹配选项';empty.hidden=true;options.append(empty);
   const all=document.createElement('button');all.type='button';all.textContent='全部';
   all.addEventListener('click',()=>{
     options.querySelectorAll('input:checked').forEach(input=>input.checked=false);
-    updateFilterSummary(id,placeholder);if(snapshot)renderDetails();
+    updateFilterSummary(id,placeholder);change();
   });
-  options.append(all);updateFilterSummary(id,placeholder);
+  options.append(all);
+  search.addEventListener('input',()=>{
+    const keyword=search.value.trim().toLocaleLowerCase('zh-CN');let matches=0;
+    options.querySelectorAll('label').forEach(row=>{
+      const matched=!keyword||row.textContent.toLocaleLowerCase('zh-CN').includes(keyword);
+      row.hidden=!matched;
+      row.style.display=matched?'':'none';
+      if(matched)matches++;
+    });
+    empty.hidden=matches!==0;
+    empty.style.display=matches?'none':'';
+  });
+  updateFilterSummary(id,placeholder);
+}
+const tokenFilterValue = row => String(row.token_id);
+function populateTokenFilter(){
+  const counts=new Map();
+  tokenOptions.forEach(row=>counts.set(row.token_name,(counts.get(row.token_name)||0)+1));
+  const labels=new Map(tokenOptions.map(row=>[String(row.token_id),counts.get(row.token_name)>1?`${row.token_name}（ID ${row.token_id}）`:row.token_name]));
+  populateFilter('token','全部令牌',[...labels.keys()].sort((a,b)=>labels.get(a).localeCompare(labels.get(b))),value=>labels.get(value),refreshSelection);
+}
+function populateGroupFilter(){
+  populateFilter('group','全部分组',groupOptions.map(row=>row.group_name),value=>value||'未分组',refreshSelection);
 }
 // Browser-only diagnostics: never add fields to the API snapshot or Excel export.
 const developerMode = new URLSearchParams(window.location.search).get('dev') === '1';
@@ -101,6 +135,7 @@ function renderDetails() {
       let end=i+1;while(end<data.length && data[end].user_id===r.user_id && data[end].username===r.username)end++;
       userCell(tr,r).rowSpan=end-i;
     }
+    if(detailMode==='token')cell(tr,r.token_name||'未知令牌','token-name');
     cell(tr,number(r.request_count,0),'','request_count');cell(tr,r.model_name,'model','model_name');
     for(const key of [...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount']){
       const td=cell(tr,number(r[key],tokenFields.includes(key)?0:6),'',key);
@@ -109,21 +144,90 @@ function renderDetails() {
     developerCells(tr,r);
     $('rows').append(tr);
   }
-  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size+(developerMode?2:0);$('rows').append(tr);}
-  const tr=document.createElement('tr');cell(tr,'总计','','username');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
+  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
+  const tr=document.createElement('tr');cell(tr,'总计','','username');if(detailMode==='token')cell(tr,'','token-name');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
   for(const key of ['group_ratio','input_price','output_price','cache_price','write_price'])cell(tr,'','',key);
   bindMoneyTooltip(cell(tr,number(total.amount),'','amount'),()=>totalMoneyFormula(data,total.amount));
   developerCells(tr,total);
   $('totals').append(tr);
   applyColumnVisibility();
 }
+function setDetailMode(mode){
+  detailMode=mode;
+  document.querySelectorAll('[data-detail-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.detailMode===mode)));
+}
+function updateReportStatus(){
+  const rows=selectedRows();
+  const label=detailMode==='token'?'用户令牌模型汇总':'用户模型汇总';
+  $('status').className='';
+  $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${rows.length} 条${label}`;
+  if(snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
+}
+async function loadTokenDetails(){
+  if(tokenSnapshot||!snapshot)return;
+  const expected=`${snapshot.start}\n${snapshot.end}`;
+  const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/by-token?'+params);
+  if(!response.ok){let msg='分令牌查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenSnapshot=result;
+}
+async function loadTokenOptions(){
+  const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/tokens?'+params);
+  if(!response.ok){let msg='令牌列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenOptions=result.rows;
+}
+async function loadGroupOptions(){
+  const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/groups?'+params);
+  if(!response.ok){let msg='分组列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)groupOptions=result.rows;
+}
+async function loadFilteredSelection(){
+  const tokenIds=[...selectedFilterValues('token')].sort(),groups=[...selectedFilterValues('group')].sort();
+  if(!tokenIds.length&&!groups.length){filteredSelectionSnapshot=null;return;}
+  const expected=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${tokenIds.join(',')}\n${groups.join(',')}`;
+  const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  tokenIds.forEach(id=>params.append('token_id',id));
+  groups.forEach(group=>params.append('group',group));
+  if(detailMode==='token')params.set('by_token','1');
+  const response=await fetch('/statistics/api/usage/by-selection?'+params);
+  if(!response.ok){let msg='筛选查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  const current=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${[...selectedFilterValues('token')].sort().join(',')}\n${[...selectedFilterValues('group')].sort().join(',')}`;
+  if(expected===current)filteredSelectionSnapshot=result;
+}
+async function refreshSelection(){
+  filteredSelectionSnapshot=null;
+  if(!snapshot)return;
+  $('status').className='';$('status').textContent='正在应用筛选…';
+  try{await loadFilteredSelection();renderDetails();updateReportStatus();}
+  catch(error){$('status').className='error';$('status').textContent=error.message;}
+}
+document.querySelectorAll('[data-detail-mode]').forEach(button=>button.addEventListener('click',async()=>{
+  const mode=button.dataset.detailMode;
+  if(mode===detailMode)return;
+  setDetailMode(mode);
+  filteredSelectionSnapshot=null;
+  document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=true);
+  $('status').className='';$('status').textContent='正在切换明细…';
+  try{
+    if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
+    else if(mode==='token')await loadTokenDetails();
+    renderDetails();updateReportStatus();
+  }
+  catch(error){setDetailMode('summary');renderDetails();$('status').className='error';$('status').textContent=error.message;}
+  finally{document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=false);}
+}));
 function render() {
   const data=snapshot.rows;
   renderSummary(data);
   renderDetails();
   renderRanking(data);
-  $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${data.length} 条用户模型汇总`;
-  if(data.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
+  updateReportStatus();
 }
 function renderRanking(data) {
   const models=new Map();data.forEach(r=>models.set(r.model_name,(models.get(r.model_name)||0)+Number(r.amount)));
@@ -171,11 +275,14 @@ async function query(event){
   try{
     const response=await fetch('/statistics/api/usage?'+params);
     if(!response.ok){let msg='查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-    snapshot=await response.json();
+    snapshot=await response.json();tokenSnapshot=null;filteredSelectionSnapshot=null;tokenOptions=[];groupOptions=[];
     const userNames=[...new Set(snapshot.rows.map(r=>r.username))].sort();
     const displayNames=new Map(snapshot.rows.map(r=>[r.username,r.display_name]));
     populateFilter('user','全部用户',userNames,name=>displayNames.get(name)?`${name}（${displayNames.get(name)}）`:name);
     populateFilter('model','全部模型',[...new Set(snapshot.rows.map(r=>r.model_name))].sort(),name=>name);
+    await Promise.all([loadTokenOptions(),loadGroupOptions()]);populateTokenFilter();populateGroupFilter();
+    if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
+    else if(detailMode==='token')await loadTokenDetails();
     $('updated').textContent='更新于 '+snapshot.updated_at.replace('T',' ').slice(0,19)+' 北京时间';render();$('export').disabled=false;
   }catch(error){$('status').className='error';$('status').textContent=error.message;}
   finally{$('submit').disabled=false;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=false);}

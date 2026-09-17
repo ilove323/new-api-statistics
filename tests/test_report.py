@@ -4,6 +4,7 @@ import unittest
 from io import BytesIO
 from copy import deepcopy
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 from openpyxl import load_workbook
 
@@ -71,6 +72,22 @@ class ReportTest(unittest.TestCase):
             text = response.get_data(as_text=True)
             self.assertIn("示例网关&lt;script&gt;", text)
             self.assertIn("用量统计</title>", text)
+            self.assertIn("令牌汇总", text)
+            self.assertIn("分令牌", text)
+            self.assertIn("data-token-column hidden", text)
+            self.assertIn('id="token-filter"', text)
+            self.assertIn("筛选令牌", text)
+            self.assertIn('id="group-filter"', text)
+            self.assertIn("筛选分组", text)
+            self.assertIn('data-preset="current-month">本月', text)
+            script = Path(app.static_folder, "app.js").read_text()
+            self.assertIn("filter-search", script)
+            self.assertIn("row.style.display=matched?'':'none'", script)
+            self.assertIn("输入关键字筛选", script)
+            presets = Path(app.static_folder, "presets.js").read_text()
+            self.assertIn("preset === 'current-month'", presets)
+            stylesheet = Path(app.static_folder, "app.css").read_text()
+            self.assertIn(".filter-menu label[hidden]{display:none}", stylesheet)
 
     def setUp(self):
         self.rows = decorate(
@@ -203,6 +220,7 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(ws["B2"].value, "显示名")
         self.assertEqual(ws["B3"].value, "测试显示名")
         self.assertEqual(ws["C2"].value, "消费请求数")
+        self.assertEqual(ws["J2"].value, "倍率")
         self.assertEqual(ws["D3"].data_type, "s")
         self.assertEqual(ws["O3"].data_type, "n")
         self.assertEqual(ws["O5"].value, "=SUM(O3:O4)")
@@ -382,6 +400,66 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(
                 client.get("/statistics/", auth=("admin", "testing")).status_code, 401
             )
+
+    def test_token_detail_endpoint_is_separate_from_excel(self):
+        token_rows = [dict(self.rows[0], token_id=7, token_name="key-a")]
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.app.load_report", return_value=token_rows
+            ) as load,
+        ):
+            response = app.test_client().get(
+                "/statistics/api/usage/by-token?start=2026-07-26&end=2026-08-25",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json["rows"][0]["token_name"], "key-a")
+            load.assert_called_once_with("2026-07-26", "2026-08-25", by_token=True)
+
+    def test_token_group_options_and_filtered_summary_endpoints(self):
+        token_rows = [dict(token_id=7, token_name="key-a")]
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.app.load_token_options", return_value=token_rows
+            ) as options,
+            patch(
+                "new_api_statistics.app.load_group_options",
+                return_value=[{"group_name": "auto"}],
+            ) as groups,
+            patch("new_api_statistics.app.load_report", return_value=self.rows) as load,
+        ):
+            client = app.test_client()
+            response = client.get(
+                "/statistics/api/usage/tokens?start=2026-07-26&end=2026-08-25",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.json["rows"], token_rows)
+            options.assert_called_once_with("2026-07-26", "2026-08-25")
+            response = client.get(
+                "/statistics/api/usage/groups?start=2026-07-26&end=2026-08-25",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.json["rows"], [{"group_name": "auto"}])
+            groups.assert_called_once_with("2026-07-26", "2026-08-25")
+            response = client.get(
+                "/statistics/api/usage/by-selection?start=2026-07-26&end=2026-08-25&token_id=9&token_id=7&group=auto&by_token=1",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.status_code, 200)
+            load.assert_called_once_with(
+                "2026-07-26",
+                "2026-08-25",
+                by_token=True,
+                token_ids=[7, 9],
+                groups=["auto"],
+            )
+            response = client.get(
+                "/statistics/api/usage/by-selection?start=2026-07-26&end=2026-08-25&token_id=bad",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ from new_api_statistics import notifications
 from new_api_statistics.report import (
     TZ,
     export_excel,
+    load_group_options,
     load_report,
+    load_token_options,
     totals,
     parse_boundary,
     rankings,
@@ -85,9 +87,9 @@ def index():
     )
 
 
-def selected():
+def selected(*, by_token=False):
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    rows = load_report(start, end)
+    rows = load_report(start, end, by_token=by_token)
     user = request.args.get("user", "").strip()
     if user:
         rows = [r for r in rows if r["username"] == user]
@@ -108,6 +110,59 @@ def usage():
         rankings=rankings(rows),
         updated_at=datetime.now(TZ).isoformat(timespec="seconds"),
     )
+
+
+@app.get("/statistics/api/usage/by-token")
+def usage_by_token():
+    start, end, rows = selected(by_token=True)
+    return jsonify(start=start, end=end, rows=rows)
+
+
+@app.get("/statistics/api/usage/tokens")
+def usage_tokens():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    return jsonify(start=start, end=end, rows=load_token_options(start, end))
+
+
+@app.get("/statistics/api/usage/groups")
+def usage_groups():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    return jsonify(start=start, end=end, rows=load_group_options(start, end))
+
+
+def requested_token_ids():
+    values = request.args.getlist("token_id")
+    if len(values) > 500:
+        raise ValueError("请选择有效的令牌。")
+    if not values:
+        return None
+    try:
+        token_ids = sorted({int(value) for value in values})
+    except ValueError:
+        raise ValueError("请选择有效的令牌。") from None
+    if any(token_id < 0 for token_id in token_ids):
+        raise ValueError("请选择有效的令牌。")
+    return token_ids
+
+
+def requested_groups():
+    values = request.args.getlist("group")
+    if len(values) > 500 or any(len(value) > 128 for value in values):
+        raise ValueError("请选择有效的分组。")
+    return sorted(set(values)) or None
+
+
+@app.get("/statistics/api/usage/by-selection")
+def usage_by_selection():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    token_ids, groups = requested_token_ids(), requested_groups()
+    if token_ids is None and groups is None:
+        raise ValueError("请选择令牌或分组。")
+    by_token = request.args.get("by_token", "0") == "1"
+    rows = load_report(
+        start, end, by_token=by_token, token_ids=token_ids, groups=groups
+    )
+    return jsonify(start=start, end=end, rows=rows)
 
 
 @app.get("/statistics/api/export")

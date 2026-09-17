@@ -5,6 +5,8 @@ function presetRange(preset, now = Date.now()) {
   if (preset === 'month') {
     start = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth() - 1, 1));
     end = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), 1) - 1000);
+  } else if (preset === 'current-month') {
+    start = new Date(Date.UTC(shanghai.getUTCFullYear(), shanghai.getUTCMonth(), 1));
   } else {
     start = new Date(shanghai.getTime() - Number(preset) * 86400000);
   }

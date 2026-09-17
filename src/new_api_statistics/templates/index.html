@@ -32,6 +32,7 @@
     </form>
     <div class="presets" aria-label="快捷时间范围">
       <button type="button" data-preset="month">上个月</button>
+      <button type="button" data-preset="current-month">本月</button>
       <button type="button" data-preset="30">近30天</button>
       <button type="button" data-preset="7">近7天</button>
       <button type="button" data-preset="1">近1天</button>
@@ -56,12 +57,20 @@
       </div>
       <div id="chart" role="tabpanel" aria-labelledby="tab-model"></div>
     </section>
-    <section><div class="table-heading"><h2>用户模型明细</h2><div class="detail-controls">
+    <section><div class="table-heading"><div class="detail-title"><h2>用户模型明细</h2><div class="detail-mode" role="group" aria-label="令牌展示方式">
+      <button type="button" data-detail-mode="summary" aria-pressed="true">令牌汇总</button><button type="button" data-detail-mode="token" aria-pressed="false">分令牌</button>
+    </div></div><div class="detail-controls">
       <div class="detail-filter"><span>用户</span><details class="filter-picker">
         <summary id="user-summary">全部用户</summary><div id="user-options" class="filter-menu" aria-label="筛选用户"></div>
       </details></div>
       <div class="detail-filter"><span>模型</span><details class="filter-picker">
         <summary id="model-summary">全部模型</summary><div id="model-options" class="filter-menu" aria-label="筛选模型"></div>
+      </details></div>
+      <div class="detail-filter"><span>令牌</span><details id="token-filter" class="filter-picker">
+        <summary id="token-summary">全部令牌</summary><div id="token-options" class="filter-menu" aria-label="筛选令牌"></div>
+      </details></div>
+      <div class="detail-filter"><span>分组</span><details id="group-filter" class="filter-picker">
+        <summary id="group-summary">全部分组</summary><div id="group-options" class="filter-menu" aria-label="筛选分组"></div>
       </details></div>
       <span>价格单位：元 / 百万 Token</span>
       <details class="column-picker"><summary>显示列</summary><div class="column-menu" aria-label="选择明细表显示列">
@@ -73,7 +82,7 @@
         <label><input type="checkbox" data-column-toggle="output_tokens" checked>输出 Token</label>
         <label><input type="checkbox" data-column-toggle="cache_read_tokens" checked>缓存读取 Token</label>
         <label><input type="checkbox" data-column-toggle="cache_write_tokens" checked>缓存写入 Token</label>
-        <label><input type="checkbox" data-column-toggle="group_ratio" checked>最后倍率</label>
+        <label><input type="checkbox" data-column-toggle="group_ratio" checked>倍率</label>
         <label><input type="checkbox" data-column-toggle="input_price" checked>输入价格</label>
         <label><input type="checkbox" data-column-toggle="output_price" checked>输出价格</label>
         <label><input type="checkbox" data-column-toggle="cache_price" checked>缓存读价格</label>
@@ -83,7 +92,7 @@
       </div></details>
     </div></div>
       <div class="table-wrap" tabindex="0" aria-label="用户模型用量表，可横向滚动">
-        <table id="usage-table"><thead><tr><th data-column="username">用户名</th><th data-column="request_count">消费请求数</th><th data-column="model_name">模型</th><th data-column="total_tokens">总 Token</th><th data-column="input_tokens">输入 Token</th><th data-column="output_tokens">输出 Token</th><th data-column="cache_read_tokens">缓存读取 Token</th><th data-column="cache_write_tokens">缓存写入 Token</th><th data-column="group_ratio">最后倍率</th><th data-column="input_price">输入价格</th><th data-column="output_price">输出价格</th><th data-column="cache_price">缓存读价格</th><th data-column="write_price">缓存写价格</th><th data-column="amount">消费金额</th></tr></thead><tbody id="rows"></tbody><tfoot id="totals"></tfoot></table>
+        <table id="usage-table"><thead><tr><th data-column="username">用户名</th><th data-token-column hidden>令牌</th><th data-column="request_count">消费请求数</th><th data-column="model_name">模型</th><th data-column="total_tokens">总 Token</th><th data-column="input_tokens">输入 Token</th><th data-column="output_tokens">输出 Token</th><th data-column="cache_read_tokens">缓存读取 Token</th><th data-column="cache_write_tokens">缓存写入 Token</th><th data-column="group_ratio">倍率</th><th data-column="input_price">输入价格</th><th data-column="output_price">输出价格</th><th data-column="cache_price">缓存读价格</th><th data-column="write_price">缓存写价格</th><th data-column="amount">消费金额</th></tr></thead><tbody id="rows"></tbody><tfoot id="totals"></tfoot></table>
       </div>
     </section>
   </main>
