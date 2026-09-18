@@ -13,6 +13,9 @@ const detailColumns = ['username','request_count','model_name',...tokenFields,'g
 const modelSummaryColumns = ['group_ratio','input_price','output_price','cache_price','write_price'];
 const columnStorageKey = 'new-api-statistics.visible-columns';
 let modelColumnSelection = null;
+const developerLevel = Number(new URLSearchParams(window.location.search).get('dev')||0);
+const developerMode = developerLevel>=1;
+const failureMode = developerLevel>=2;
 const number = (n, digits=6) => n === null || n === undefined ? '—' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:digits});
 const cell = (tr, value, cls='', column='') => {const td=document.createElement('td');td.textContent=value;td.className=cls;if(column)td.dataset.column=column;tr.append(td);return td;};
 const userCell = (tr,row) => {
@@ -25,11 +28,13 @@ function aggregateModels(data){
   for(const row of data){
     const key=[row.user_id,row.username,detailMode==='token'?row.token_id:''].join('\u0000');
     if(!grouped.has(key)){
-      grouped.set(key,{...row,model_name:'',amount:0,request_count:0,...Object.fromEntries(tokenFields.map(field=>[field,0])),...Object.fromEntries(priceFields.map(field=>[field,null])),_sourceRows:[]});
+      grouped.set(key,{...row,model_name:'',amount:0,request_count:0,failure_count:0,failure_codes:{},...Object.fromEntries(tokenFields.map(field=>[field,0])),...Object.fromEntries(priceFields.map(field=>[field,null])),_sourceRows:[]});
     }
     const total=grouped.get(key);
     total.amount+=Number(row.amount);total.request_count+=Number(row.request_count);
     tokenFields.forEach(field=>total[field]+=Number(row[field]));
+    for(const [code,count] of Object.entries(row.failure_codes||{}))total.failure_codes[code]=(total.failure_codes[code]||0)+Number(count);
+    total.failure_count+=Number(row.failure_count||0);
     total._sourceRows.push(row);
   }
   return [...grouped.values()];
@@ -57,7 +62,7 @@ function applyColumnVisibility(){
     if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column)||hiddenByMode.has(element.dataset.column);
   });
   document.querySelectorAll('#usage-table [data-token-column]').forEach(element=>element.hidden=detailMode!=='token');
-  const columns=[...visible].filter(column=>!hiddenByMode.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);
+  const columns=[...visible].filter(column=>!hiddenByMode.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0)+(failureMode?1:0);
   $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,columns*115)+'px');
 }
 function loadVisibleColumns(){
@@ -117,13 +122,16 @@ function populateTokenFilter(){
 function populateGroupFilter(){
   populateFilter('group','全部分组',groupOptions.map(row=>row.group_name),value=>value||'未分组',refreshSelection);
 }
-// Browser-only diagnostics: never add fields to the API snapshot or Excel export.
-const developerMode = new URLSearchParams(window.location.search).get('dev') === '1';
+// Developer diagnostics remain browser-only and never change Excel exports.
 if(developerMode){
   for(const [column,label] of [['cache_hit_rate','缓存命中率'],['amount_per_million','每百万 Token 金额']]){
     const th=document.createElement('th');th.textContent=label;th.dataset.column=column;
     document.querySelector('#usage-table thead tr').append(th);
   }
+}
+if(failureMode){
+  const th=document.createElement('th');th.textContent='失败请求';th.dataset.column='failure_requests';
+  document.querySelector('#usage-table thead tr').append(th);
 }
 function developerCells(tr,row){
   if(!developerMode)return;
@@ -132,9 +140,18 @@ function developerCells(tr,row){
   const tokens=Number(row.total_tokens);
   cell(tr,tokens>0?number(Number(row.amount)/tokens*1000000,6):'—','','amount_per_million');
 }
+function failureCell(tr,row){
+  if(!failureMode)return;
+  const lines=Object.entries(row.failure_codes||{}).map(([code,count])=>`${code} ${number(count,0)}次`);
+  cell(tr,lines.length?lines.join('\n'):'—','failure-requests','failure_requests');
+}
 function sumRows(data) {
-  const total={amount:0,request_count:0,...Object.fromEntries(tokenFields.map(k=>[k,0]))};
-  data.forEach(r=>{total.amount+=Number(r.amount);total.request_count+=Number(r.request_count);tokenFields.forEach(k=>total[k]+=Number(r[k]));});
+  const total={amount:0,request_count:0,failure_count:0,failure_codes:{},...Object.fromEntries(tokenFields.map(k=>[k,0]))};
+  data.forEach(r=>{
+    total.amount+=Number(r.amount);total.request_count+=Number(r.request_count);total.failure_count+=Number(r.failure_count||0);
+    tokenFields.forEach(k=>total[k]+=Number(r[k]));
+    for(const [code,count] of Object.entries(r.failure_codes||{}))total.failure_codes[code]=(total.failure_codes[code]||0)+Number(count);
+  });
   return total;
 }
 function renderSummary(data) {
@@ -164,13 +181,15 @@ function renderDetails() {
       if(key==='amount')bindMoneyTooltip(td,()=>modelMode==='summary'?totalMoneyFormula(r._sourceRows,r.amount):rowMoneyFormula(r));
     }
     developerCells(tr,r);
+    failureCell(tr,r);
     $('rows').append(tr);
   }
-  if(!data.length){const hidden=modelMode==='summary'?new Set(['model_name',...modelSummaryColumns]):new Set(),tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=[...visibleColumns()].filter(column=>!hidden.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
+  if(!data.length){const hidden=modelMode==='summary'?new Set(['model_name',...modelSummaryColumns]):new Set(),tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费或失败请求','empty').colSpan=[...visibleColumns()].filter(column=>!hidden.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0)+(failureMode?1:0);$('rows').append(tr);}
   const tr=document.createElement('tr');cell(tr,'总计','','username');if(detailMode==='token')cell(tr,'','token-name');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
   for(const key of ['group_ratio','input_price','output_price','cache_price','write_price'])cell(tr,'','',key);
   bindMoneyTooltip(cell(tr,number(total.amount),'','amount'),()=>totalMoneyFormula(data,total.amount));
   developerCells(tr,total);
+  failureCell(tr,total);
   $('totals').append(tr);
   applyColumnVisibility();
 }
@@ -201,6 +220,7 @@ async function loadTokenDetails(){
   if(tokenSnapshot||!snapshot)return;
   const expected=`${snapshot.start}\n${snapshot.end}`;
   const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  if(failureMode)params.set('dev','2');
   const response=await fetch('/statistics/api/usage/by-token?'+params);
   if(!response.ok){let msg='分令牌查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
   const result=await response.json();
@@ -208,6 +228,7 @@ async function loadTokenDetails(){
 }
 async function loadTokenOptions(){
   const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  if(failureMode)params.set('dev','2');
   const response=await fetch('/statistics/api/usage/tokens?'+params);
   if(!response.ok){let msg='令牌列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
   const result=await response.json();
@@ -215,6 +236,7 @@ async function loadTokenOptions(){
 }
 async function loadGroupOptions(){
   const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  if(failureMode)params.set('dev','2');
   const response=await fetch('/statistics/api/usage/groups?'+params);
   if(!response.ok){let msg='分组列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
   const result=await response.json();
@@ -225,6 +247,7 @@ async function loadFilteredSelection(){
   if(!tokenIds.length&&!groups.length){filteredSelectionSnapshot=null;return;}
   const expected=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${tokenIds.join(',')}\n${groups.join(',')}`;
   const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  if(failureMode)params.set('dev','2');
   tokenIds.forEach(id=>params.append('token_id',id));
   groups.forEach(group=>params.append('group',group));
   if(detailMode==='token')params.set('by_token','1');
@@ -313,6 +336,7 @@ async function query(event){
   $('submit').disabled=true;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=true);
   $('export').disabled=true;$('status').className='';$('status').textContent='正在查询…';
   const params=new URLSearchParams({start:$('start').value,end:$('end').value});
+  if(failureMode)params.set('dev','2');
   try{
     const response=await fetch('/statistics/api/usage?'+params);
     if(!response.ok){let msg='查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}

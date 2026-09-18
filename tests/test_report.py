@@ -20,6 +20,7 @@ from new_api_statistics.report import (
     convert_tokens,
     load_site_name,
     cost_formula,
+    merge_failures,
 )
 
 
@@ -157,6 +158,58 @@ class ReportTest(unittest.TestCase):
                 "request_count",
             },
         )
+
+    def test_failure_counts_merge_and_keep_failure_only_dimensions(self):
+        rows = [
+            dict(
+                user_id=1,
+                username="user",
+                token_id=10,
+                token_name="key",
+                model_name="model-a",
+                total_tokens=100,
+            )
+        ]
+        failures = [
+            dict(
+                user_id=1,
+                username="user",
+                token_id=10,
+                token_name="key-new",
+                model_name="model-a",
+                status_code="502",
+                failure_count=1,
+                latest_at=2,
+            ),
+            dict(
+                user_id=1,
+                username="user",
+                token_id=10,
+                token_name="key-new",
+                model_name="model-a",
+                status_code="429",
+                failure_count=3,
+                latest_at=3,
+            ),
+            dict(
+                user_id=2,
+                username="failure-only",
+                token_id=20,
+                token_name="failed-key",
+                model_name="model-b",
+                status_code="503",
+                failure_count=2,
+                latest_at=4,
+            ),
+        ]
+        merged = merge_failures(rows, failures, by_token=True)
+        by_model = {row["model_name"]: row for row in merged}
+        self.assertEqual(by_model["model-a"]["failure_codes"], {"429": 3, "502": 1})
+        self.assertEqual(by_model["model-a"]["failure_count"], 4)
+        self.assertEqual(by_model["model-a"]["token_name"], "key-new")
+        self.assertEqual(by_model["model-b"]["request_count"], 0)
+        self.assertEqual(by_model["model-b"]["total_tokens"], 0)
+        self.assertEqual(by_model["model-b"]["amount"], 0)
 
     def test_interval_average_rates(self):
         start, end = "2026-09-01T00:00:00", "2026-09-01T00:01:59"
@@ -359,7 +412,7 @@ class ReportTest(unittest.TestCase):
             patch("new_api_statistics.app.load_report", return_value=self.rows),
         ):
             books = []
-            for suffix in ["", "&dev=0", "&dev=1"]:
+            for suffix in ["", "&dev=0", "&dev=1", "&dev=2"]:
                 response = app.test_client().get(
                     "/statistics/api/export?start=2026-07-26&end=2026-08-25" + suffix,
                     auth=("test_admin", "testing"),
@@ -370,6 +423,23 @@ class ReportTest(unittest.TestCase):
                 books.append([[list(row) for row in ws.values] for ws in wb.worksheets])
             self.assertEqual(books[0], books[1])
             self.assertEqual(books[0], books[2])
+            self.assertEqual(books[0], books[3])
+
+    def test_developer_two_requests_failure_aggregation(self):
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.app.load_report", return_value=deepcopy(self.rows)
+            ) as load,
+        ):
+            response = app.test_client().get(
+                "/statistics/api/usage?start=2026-07-26&end=2026-08-25&dev=2",
+                auth=("test_admin", "testing"),
+            )
+            self.assertEqual(response.status_code, 200)
+            load.assert_called_once_with(
+                "2026-07-26", "2026-08-25", by_token=False, include_failures=True
+            )
 
     def test_auth_and_user_model_filters(self):
         with patch(

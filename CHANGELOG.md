@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `?dev=2` failure-request diagnostics grouped by HTTP status across the
+  current user, model, token and group dimensions without changing Excel exports.
+
 ## 0.1.1 - 2026-09-18
 
 - Add searchable multi-select user, model, token and group filters to the usage detail table.

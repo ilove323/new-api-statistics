@@ -13,7 +13,8 @@ CI 配置覆盖 PostgreSQL 15/16，其他版本需自行验证。尚无按 New A
 | options | key, value |
 | channels | id, name, status |
 
-消费日志为 type=2，quota / 500000 为消费金额。认证要求 bcrypt 密码、
+消费日志为 `type=2`，`quota / 500000` 为消费金额；`?dev=2` 的失败请求统计读取
+`type=5`，并要求 `other` 为 JSON 且包含 `status_code`。认证要求 bcrypt 密码、
 role >= 10、status=1 且 deleted_at 为空。价格来自 options 中模型倍率配置。
 金额单位和 quota 换算必须与实际站点一致。
 

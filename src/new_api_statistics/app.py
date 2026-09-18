@@ -87,9 +87,16 @@ def index():
     )
 
 
-def selected(*, by_token=False):
+def failure_diagnostics():
+    return request.args.get("dev") == "2"
+
+
+def selected(*, by_token=False, include_failures=False):
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    rows = load_report(start, end, by_token=by_token)
+    kwargs = {"by_token": by_token}
+    if include_failures:
+        kwargs["include_failures"] = True
+    rows = load_report(start, end, **kwargs)
     user = request.args.get("user", "").strip()
     if user:
         rows = [r for r in rows if r["username"] == user]
@@ -101,7 +108,7 @@ def selected(*, by_token=False):
 
 @app.get("/statistics/api/usage")
 def usage():
-    start, end, rows = selected()
+    start, end, rows = selected(include_failures=failure_diagnostics())
     return jsonify(
         start=start,
         end=end,
@@ -114,20 +121,30 @@ def usage():
 
 @app.get("/statistics/api/usage/by-token")
 def usage_by_token():
-    start, end, rows = selected(by_token=True)
+    start, end, rows = selected(by_token=True, include_failures=failure_diagnostics())
     return jsonify(start=start, end=end, rows=rows)
 
 
 @app.get("/statistics/api/usage/tokens")
 def usage_tokens():
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    return jsonify(start=start, end=end, rows=load_token_options(start, end))
+    kwargs = {"include_failures": True} if failure_diagnostics() else {}
+    return jsonify(
+        start=start,
+        end=end,
+        rows=load_token_options(start, end, **kwargs),
+    )
 
 
 @app.get("/statistics/api/usage/groups")
 def usage_groups():
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    return jsonify(start=start, end=end, rows=load_group_options(start, end))
+    kwargs = {"include_failures": True} if failure_diagnostics() else {}
+    return jsonify(
+        start=start,
+        end=end,
+        rows=load_group_options(start, end, **kwargs),
+    )
 
 
 def requested_token_ids():
@@ -159,9 +176,10 @@ def usage_by_selection():
     if token_ids is None and groups is None:
         raise ValueError("请选择令牌或分组。")
     by_token = request.args.get("by_token", "0") == "1"
-    rows = load_report(
-        start, end, by_token=by_token, token_ids=token_ids, groups=groups
-    )
+    kwargs = dict(by_token=by_token, token_ids=token_ids, groups=groups)
+    if failure_diagnostics():
+        kwargs["include_failures"] = True
+    rows = load_report(start, end, **kwargs)
     return jsonify(start=start, end=end, rows=rows)
 
 
