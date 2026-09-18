@@ -141,6 +141,13 @@
       </form>
     </section>
   </dialog>
+  <dialog id="balance-history-preview" class="balance-dialog balance-wide" aria-labelledby="balance-history-preview-title">
+    <div class="dialog-heading"><h2 id="balance-history-preview-title">历史计费对比</h2><button type="button" data-close="balance-history-preview">关闭</button></div>
+    <p>以下费用将按照当前渠道规则替换原月度归档。确认前请逐月核对。</p>
+    <div class="balance-table"><table><thead><tr><th>月份</th><th>原费用（元）</th><th>新费用（元）</th><th>差额（元）</th></tr></thead><tbody id="balance-history-preview-rows"></tbody></table></div>
+    <p id="balance-history-preview-status" role="status"></p>
+    <div class="dialog-actions"><button type="button" data-close="balance-history-preview">取消</button><button id="balance-history-apply" class="danger-button" type="button">确认并记录新费用</button></div>
+  </dialog>
   <dialog id="balance-alerts" class="balance-dialog balance-wide" aria-labelledby="balance-alerts-title">
     <div class="dialog-heading"><h2 id="balance-alerts-title">余额与警报</h2><button type="button" data-close="balance-alerts">关闭</button></div>
     <p id="balance-status" role="status"></p>

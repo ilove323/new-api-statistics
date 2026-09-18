@@ -133,22 +133,41 @@ class BalanceTest(unittest.TestCase):
     def test_recalculate_history_endpoint_and_fail_closed(self):
         client = app.test_client()
         body = self.body(excluded_channel_ids=[2])
+        preview_rows = [{"month": "2026-01", "before": "10.00", "after": "8.00"}]
         result = {"version": 2, "months": 3}
         with (
             patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.balance.history_preview",
+                return_value={"version": 1, "rows": preview_rows},
+            ) as preview,
             patch(
                 "new_api_statistics.balance.recalculate_history",
                 return_value=result,
             ) as recalculate,
         ):
             url = "/statistics/api/balance/recalculate-history"
+            preview_url = url + "/preview"
             self.assertEqual(
-                client.post(url, json=body, auth=("test_admin", "test")).status_code,
+                client.post(
+                    preview_url, json=body, auth=("test_admin", "test")
+                ).status_code,
                 403,
             )
+            preview_response = client.post(
+                preview_url,
+                json=body,
+                auth=("test_admin", "test"),
+                headers={"X-Statistics-Request": "1"},
+            )
+            self.assertEqual(
+                preview_response.get_json(), {"version": 1, "rows": preview_rows}
+            )
+            preview.assert_called_once_with(body)
+            payload = {"settings": body, "preview": preview_rows}
             response = client.post(
                 url,
-                json=body,
+                json=payload,
                 auth=("test_admin", "test"),
                 headers={"X-Statistics-Request": "1"},
             )
@@ -156,16 +175,16 @@ class BalanceTest(unittest.TestCase):
                 response.get_json(),
                 {"recalculated": True, "version": 2, "months": 3},
             )
-            recalculate.assert_called_once_with(body, "test_admin")
-            recalculate.side_effect = balance.HistoryDataMissing()
+            recalculate.assert_called_once_with(body, preview_rows, "test_admin")
+            recalculate.side_effect = balance.HistoryPreviewChanged()
             failed = client.post(
                 url,
-                json=body,
+                json=payload,
                 auth=("test_admin", "test"),
                 headers={"X-Statistics-Request": "1"},
             )
             self.assertEqual(failed.status_code, 409)
-            self.assertIn("原归档", failed.get_json()["error"])
+            self.assertIn("重新预览", failed.get_json()["error"])
 
     def test_month_boundaries(self):
         self.assertEqual(

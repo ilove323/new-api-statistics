@@ -247,8 +247,12 @@ def main():
                 "new_api_statistics.balance.source_amounts_with_raw",
                 complete_history,
             ):
+                preview = balance.history_preview(recalculate_body, rollover)
                 result = balance.recalculate_history(
-                    recalculate_body, "test_admin", rollover
+                    recalculate_body,
+                    preview["rows"],
+                    "test_admin",
+                    rollover,
                 )
             assert result == {"version": settings["version"] + 1, "months": 3}
             with connect() as conn:
@@ -266,11 +270,11 @@ def main():
                     "SELECT channel_id FROM balance_excluded_channels"
                 ).fetchall() == [{"channel_id": 2}]
 
-            def incomplete_history(months, now, excluded_channel_ids):
+            def stable_history(months, now, excluded_channel_ids):
                 return {
                     month: {
-                        "raw": recalculated[month] - 1,
-                        "filtered": Decimal(0),
+                        "raw": recalculated[month] + 10,
+                        "filtered": recalculated[month] - 1,
                     }
                     for month in months
                 }
@@ -280,12 +284,55 @@ def main():
                 version=result["version"],
                 excluded_channel_ids=[3],
             )
+            with patch(
+                "new_api_statistics.balance.source_amounts_with_raw", stable_history
+            ):
+                stale_preview = balance.history_preview(failed_body, rollover)
+
+            def changed_history(months, now, excluded_channel_ids):
+                return {
+                    month: {
+                        "raw": recalculated[month] + 10,
+                        "filtered": recalculated[month] - 2,
+                    }
+                    for month in months
+                }
+
+            try:
+                with patch(
+                    "new_api_statistics.balance.source_amounts_with_raw",
+                    changed_history,
+                ):
+                    balance.recalculate_history(
+                        failed_body,
+                        stale_preview["rows"],
+                        "test_admin",
+                        rollover,
+                    )
+                raise AssertionError("changed preview replaced archives")
+            except balance.HistoryPreviewChanged:
+                pass
+
+            def incomplete_history(months, now, excluded_channel_ids):
+                return {
+                    month: {
+                        "raw": recalculated[month] - 1,
+                        "filtered": Decimal(0),
+                    }
+                    for month in months
+                }
+
             try:
                 with patch(
                     "new_api_statistics.balance.source_amounts_with_raw",
                     incomplete_history,
                 ):
-                    balance.recalculate_history(failed_body, "test_admin", rollover)
+                    balance.recalculate_history(
+                        failed_body,
+                        stale_preview["rows"],
+                        "test_admin",
+                        rollover,
+                    )
                 raise AssertionError("incomplete source history replaced archives")
             except balance.HistoryDataMissing:
                 pass

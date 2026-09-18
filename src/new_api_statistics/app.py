@@ -213,13 +213,36 @@ def balance_settings():
     return jsonify(saved=True)
 
 
+@app.post("/statistics/api/balance/recalculate-history/preview")
+def balance_recalculate_history_preview():
+    if not monitor_write_allowed():
+        return jsonify(error="不允许的追溯请求。"), 403
+    try:
+        result = balance.history_preview(request.get_json())
+    except balance.SettingsConflict:
+        return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
+    except balance.HistoryDataMissing:
+        return (
+            jsonify(
+                error="New API 历史日志不完整或缺少旧归档，已取消追溯，原归档和渠道设置保持不变。"
+            ),
+            409,
+        )
+    return jsonify(result)
+
+
 @app.post("/statistics/api/balance/recalculate-history")
 def balance_recalculate_history():
     if not monitor_write_allowed():
         return jsonify(error="不允许的追溯请求。"), 403
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        return jsonify(error="历史计费预览无效，请重新预览。"), 400
     try:
         result = balance.recalculate_history(
-            request.get_json(), request.authorization.username
+            payload.get("settings"),
+            payload.get("preview"),
+            request.authorization.username,
         )
     except balance.SettingsConflict:
         return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
@@ -228,6 +251,11 @@ def balance_recalculate_history():
             jsonify(
                 error="New API 历史日志不完整或缺少旧归档，已取消追溯，原归档和渠道设置保持不变。"
             ),
+            409,
+        )
+    except balance.HistoryPreviewChanged:
+        return (
+            jsonify(error="历史计费数据在预览后发生变化，未写入新费用，请重新预览。"),
             409,
         )
     return jsonify(recalculated=True, **result)
