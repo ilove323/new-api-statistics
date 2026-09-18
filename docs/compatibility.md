@@ -8,7 +8,7 @@ CI 配置覆盖 PostgreSQL 15/16，其他版本需自行验证。尚无按 New A
 
 | 表 | 字段 |
 | --- | --- |
-| logs | id, created_at, user_id, username, model_name, quota, prompt_tokens, completion_tokens, other, type, channel_id |
+| logs | id, created_at, user_id, username, model_name, quota, prompt_tokens, completion_tokens, other, type, channel_id, channel_name |
 | users | id, username, display_name, password, role, status, deleted_at |
 | options | key, value |
 | channels | id, name, status |

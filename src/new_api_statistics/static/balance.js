@@ -1,7 +1,6 @@
 /* Monitoring is site-wide and independent of report filters and Excel exports. */
 let balanceData=null,balanceVersion=null,balanceLoading=null,balanceLoadingLive=false;
 let channelVersion=null,channelDirty=false,channelBusy=false;
-let historyPreview=null;
 const balanceMoney=value=>value===null||value===undefined?'—':'¥ '+number(value,2);
 const balanceTime=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 async function balanceRequest(path,options={}){
@@ -61,10 +60,12 @@ function renderUsageChannels(rows){
   $('usage-channel-options').replaceChildren();
   if(!rows.length){const empty=document.createElement('span');empty.className='usage-channel-empty';empty.textContent='暂无可选渠道';$('usage-channel-options').append(empty);return;}
   for(const row of rows){
-    const label=document.createElement('label'),input=document.createElement('input');
+    const label=document.createElement('label'),input=document.createElement('input'),name=document.createElement('span'),status=document.createElement('span');
     input.type='checkbox';input.value=row.channel_id;input.checked=row.included;
-    const status=Number(row.channel_status)===1?'':`（状态 ${row.channel_status}）`;
-    label.append(input,document.createTextNode(`#${row.channel_id} ${row.channel_name}${status}`));$('usage-channel-options').append(label);
+    name.className='usage-channel-name';name.textContent=`ID ${row.channel_id} · ${row.channel_name}`;
+    status.className='usage-channel-status '+(row.deleted?'deleted':Number(row.channel_status)===1?'enabled':'disabled');
+    status.textContent=row.deleted?'已删除':Number(row.channel_status)===1?'已启用':'已禁用';
+    label.append(input,name,status);$('usage-channel-options').append(label);
   }
 }
 async function loadUsageChannels(){
@@ -103,44 +104,6 @@ $('balance-form').addEventListener('submit',async event=>{
   }catch(e){$('balance-settings-status').textContent=e.message;}
   finally{$('balance-save').disabled=false;}
 });
-$('balance-recalculate').addEventListener('click',async()=>{
-  const warnings=[
-    '追溯会按照当前页面中的渠道规则重新计算并覆盖已有月度归档。是否继续？',
-    '该操作会重算累计起始月份至上月的全部历史计费。若 New API 历史日志不完整，操作将失败并保留旧数据。再次确认？',
-    '最后确认：确定立即追溯历史计费吗？',
-  ];
-  if(warnings.some(message=>!window.confirm(message)))return;
-  $('balance-recalculate').disabled=true;$('balance-save').disabled=true;
-  $('balance-settings-status').textContent='正在核对历史日志并重新计算，请勿关闭页面…';
-  try{
-    const settings=balanceSettingsBody();
-    const result=await balanceRequest('/recalculate-history/preview',balanceWrite('POST',settings));
-    historyPreview={settings,rows:result.rows};
-    $('balance-history-preview-rows').replaceChildren();
-    for(const row of result.rows){
-      const tr=document.createElement('tr');
-      cell(tr,row.month);cell(tr,balanceMoney(row.before));cell(tr,balanceMoney(row.after));cell(tr,balanceMoney(Number(row.after)-Number(row.before)));
-      $('balance-history-preview-rows').append(tr);
-    }
-    $('balance-history-preview-status').textContent='';
-    $('balance-settings-status').textContent='预览已生成，确认对比后才会写入新费用。';
-    $('balance-history-preview').showModal();
-  }catch(e){$('balance-settings-status').textContent=e.message;}
-  finally{$('balance-recalculate').disabled=false;$('balance-save').disabled=false;}
-});
-$('balance-history-apply').addEventListener('click',async()=>{
-  if(!historyPreview)return;
-  $('balance-history-apply').disabled=true;
-  $('balance-history-preview-status').textContent='正在再次核对并写入新费用…';
-  try{
-    const result=await balanceRequest('/recalculate-history',balanceWrite('POST',{settings:historyPreview.settings,preview:historyPreview.rows}));
-    balanceVersion=result.version;historyPreview=null;
-    $('balance-history-preview').close();$('balance-settings').close();$('balance-alerts').showModal();
-    await refreshBalance(true);
-  }catch(e){$('balance-history-preview-status').textContent=e.message;}
-  finally{$('balance-history-apply').disabled=false;}
-});
-$('balance-history-preview').addEventListener('close',()=>{historyPreview=null;$('balance-history-preview-status').textContent='';});
 $('usage-channels-all').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=true));
 $('usage-channels-none').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=false));
 function channelButtons(){

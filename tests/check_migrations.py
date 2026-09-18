@@ -49,7 +49,7 @@ def main():
                     conn.execute(
                         "SELECT count(*) AS n FROM schema_migrations"
                     ).fetchone()["n"]
-                    == 2
+                    == 3
                 )
                 assert (
                     conn.execute(
@@ -71,6 +71,12 @@ def main():
                 ).fetchone()["name"]
                 assert conn.execute(
                     "SELECT to_regclass('balance_excluded_channels') AS name"
+                ).fetchone()["name"]
+                assert conn.execute(
+                    "SELECT to_regclass('balance_channel_inventory') AS name"
+                ).fetchone()["name"]
+                assert conn.execute(
+                    "SELECT to_regclass('balance_month_channels') AS name"
                 ).fetchone()["name"]
                 assert (
                     conn.execute(
