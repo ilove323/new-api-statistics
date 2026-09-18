@@ -213,6 +213,11 @@ def balance_settings():
     return jsonify(saved=True)
 
 
+@app.get("/statistics/api/balance/usage-channels")
+def balance_usage_channels():
+    return jsonify(rows=balance.usage_channels_snapshot())
+
+
 @app.post("/statistics/api/balance/check")
 def balance_check():
     if not monitor_write_allowed():

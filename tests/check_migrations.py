@@ -49,7 +49,7 @@ def main():
                     conn.execute(
                         "SELECT count(*) AS n FROM schema_migrations"
                     ).fetchone()["n"]
-                    == 1
+                    == 2
                 )
                 assert (
                     conn.execute(
@@ -68,6 +68,9 @@ def main():
                         AND column_name='secret_encrypted'""").fetchone()
                 assert conn.execute(
                     "SELECT to_regclass('notification_dingtalk_webhook_settings') AS name"
+                ).fetchone()["name"]
+                assert conn.execute(
+                    "SELECT to_regclass('balance_excluded_channels') AS name"
                 ).fetchone()["name"]
                 assert (
                     conn.execute(

@@ -6,7 +6,7 @@
 
 - 已运行的 New API、PostgreSQL 和 Docker Compose；Nginx 为可选。
 - 统计容器加入 New API 的现有 Docker 网络，不新建或替换其数据库。
-- 数据库账号具有 SELECT `logs`、`options`、`users` 的权限，建议使用专用只读账号。
+- 数据库账号具有 SELECT `logs`、`options`、`users`、`channels` 的权限，建议使用专用只读账号。
 - 使用 Nginx 时默认其运行在同一宿主机上；容器化 Nginx 和无 Nginx 的访问方式见下文。
 
 ## 配置与启动

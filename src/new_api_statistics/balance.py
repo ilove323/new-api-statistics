@@ -62,6 +62,51 @@ def month_list(first, end):
     return result
 
 
+def source_channels():
+    """Read the current New API channel catalog without modifying it."""
+    with psycopg.connect(
+        connect_timeout=8,
+        row_factory=dict_row,
+        options="-c default_transaction_read_only=on -c statement_timeout=15000",
+    ) as conn:
+        return conn.execute(
+            """SELECT id AS channel_id,
+                      COALESCE(NULLIF(btrim(name), ''), '渠道 #' || id::text) AS channel_name,
+                      status AS channel_status
+               FROM channels ORDER BY id"""
+        ).fetchall()
+
+
+def usage_channels_snapshot():
+    """Combine the live New API channel list with the persisted exclusion set."""
+    channels = source_channels()
+    with connect() as conn:
+        excluded = set(excluded_usage_channel_ids(conn))
+    return [dict(row, included=row["channel_id"] not in excluded) for row in channels]
+
+
+def validate_excluded_channel_ids(value):
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > 5000:
+        raise ValueError("请选择有效的消费渠道。")
+    result = set()
+    for channel_id in value:
+        if type(channel_id) is not int or channel_id < 0 or channel_id in result:
+            raise ValueError("请选择有效的消费渠道。")
+        result.add(channel_id)
+    return sorted(result)
+
+
+def excluded_usage_channel_ids(conn):
+    return [
+        row["channel_id"]
+        for row in conn.execute(
+            "SELECT channel_id FROM balance_excluded_channels"
+        ).fetchall()
+    ]
+
+
 def validate_settings(body, today=None):
     if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
         raise ValueError("请填写有效的监控设置。")
@@ -93,7 +138,13 @@ def validate_settings(body, today=None):
     if type(body.get("version")) is not int or body["version"] < 1:
         raise ValueError("设置版本无效，请重新打开设置。")
     return dict(
-        values, start_month=month, enabled=body["enabled"], version=body["version"]
+        values,
+        start_month=month,
+        enabled=body["enabled"],
+        version=body["version"],
+        excluded_channel_ids=validate_excluded_channel_ids(
+            body.get("excluded_channel_ids")
+        ),
     )
 
 
@@ -107,6 +158,7 @@ class CheckBusy(Exception):
 
 def save_settings(body, username):
     values = validate_settings(body)
+    excluded_channel_ids = values.pop("excluded_channel_ids")
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(90216321)")
         row = conn.execute(
@@ -118,6 +170,14 @@ def save_settings(body, username):
         ).fetchone()
         if not row:
             raise SettingsConflict()
+        if excluded_channel_ids is not None:
+            conn.execute("DELETE FROM balance_excluded_channels")
+            if excluded_channel_ids:
+                conn.executemany(
+                    """INSERT INTO balance_excluded_channels(channel_id,updated_by)
+                       VALUES (%s,%s)""",
+                    [(channel_id, username) for channel_id in excluded_channel_ids],
+                )
         conn.execute(
             """INSERT INTO balance_settings_audit(username,version,budget,threshold,start_month,enabled)
             VALUES (%s,%s,%s,%s,%s,%s)""",
@@ -146,14 +206,15 @@ def archive_missing(conn, first, now):
     missing = [m for m in month_list(first, current) if m not in archived]
     if not missing:
         return
-    for month, amount in source_amounts(missing, now).items():
+    excluded = excluded_usage_channel_ids(conn)
+    for month, amount in source_amounts(missing, now, excluded).items():
         conn.execute(
             "INSERT INTO balance_months(month,amount) VALUES (%s,%s) ON CONFLICT DO NOTHING",
             (month, amount),
         )
 
 
-def source_amounts(months, now):
+def source_amounts(months, now, excluded_channel_ids=None):
     """One SQL aggregate, no request-log pagination; half-open Beijing months."""
     if not months:
         return {}
@@ -174,20 +235,28 @@ def source_amounts(months, now):
         row_factory=dict_row,
         options="-c default_transaction_read_only=on -c statement_timeout=60000",
     ) as conn:
+        channel_clause = ""
+        if excluded_channel_ids:
+            channel_clause = (
+                " AND (channel_id IS NULL OR NOT (channel_id = ANY(%s::bigint[])))"
+            )
+            params.append(excluded_channel_ids)
         rows = conn.execute(
             """SELECT date_trunc('month',to_timestamp(created_at)
             AT TIME ZONE 'Asia/Shanghai')::date AS month,
             SUM(quota::numeric)/500000 AS amount FROM logs
             WHERE type=2 AND ("""
             + " OR ".join(ranges)
-            + ") GROUP BY 1",
+            + ")"
+            + channel_clause
+            + " GROUP BY 1",
             params,
         ).fetchall()
     found = {r["month"]: r["amount"] for r in rows}
     return {m: found.get(m, Decimal(0)) for m in months}
 
 
-def check_once(now=None, source=source_amounts, daily=True):
+def check_once(now=None, source=None, daily=True):
     """Idempotent rollover and catch-up, serialized across worker replicas."""
     now = (now or datetime.now(TZ)).astimezone(TZ)
     current = now.date().replace(day=1)
@@ -215,7 +284,12 @@ def check_once(now=None, source=source_amounts, daily=True):
         missing = [
             m for m in month_list(settings["start_month"], current) if m not in archived
         ]
-        amounts = source(missing + [current], now)
+        excluded = excluded_usage_channel_ids(conn)
+        amounts = (
+            source(missing + [current], now)
+            if source is not None
+            else source_amounts(missing + [current], now, excluded)
+        )
         # Do not publish a result calculated against settings changed mid-query.
         latest = conn.execute(
             "SELECT version FROM balance_settings WHERE id=1 FOR UPDATE"
@@ -299,6 +373,7 @@ def snapshot(live=False):
         alerts = conn.execute(
             "SELECT * FROM balance_alerts ORDER BY updated_at DESC LIMIT 1"
         ).fetchall()
+        excluded = excluded_usage_channel_ids(conn)
     now = datetime.now(TZ)
     if live:
         current = now.date().replace(day=1)
@@ -314,7 +389,7 @@ def snapshot(live=False):
                 valid=False,
                 stale=True,
             )
-        amount = source_amounts([current], now)[current]
+        amount = source_amounts([current], now, excluded)[current]
         historical = sum((m["amount"] for m in months), Decimal(0))
         state = dict(
             version=settings["version"],

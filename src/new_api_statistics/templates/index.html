@@ -100,32 +100,45 @@
   </main>
   <dialog id="balance-settings" class="balance-dialog" aria-labelledby="balance-settings-title">
     <h2 id="balance-settings-title">余额监控设置</h2>
-    <form id="balance-form">
-      <label class="balance-toggle"><input id="balance-enabled" type="checkbox">启用余额监控</label>
-      <label>总额度（元）<input id="balance-budget" type="number" min="0" max="999999999999" step="0.01" required></label>
-      <label>剩余额度报警阈值（元）<input id="balance-threshold" type="number" min="0" max="999999999999" step="0.01" required></label>
-      <label>累计起始月份（北京时间）<input id="balance-start" type="month" required></label>
-      <p id="balance-settings-status" role="status"></p>
-      <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="balance-save" type="submit">保存额度设置</button></div>
-    </form>
-    <h3>报警渠道</h3>
-    <form id="channel-form">
-      <label class="balance-toggle"><input id="channel-enabled" type="checkbox">启用渠道通知</label>
-      <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_webhook">钉钉自定义 Webhook 机器人</option></select></label>
-      <div id="channel-feishu-fields" class="channel-provider-fields">
-        <label>App ID<input id="channel-app-id" type="text" maxlength="512" autocomplete="off"></label>
-        <label>App Secret<input id="channel-secret" type="password" maxlength="512" autocomplete="new-password"></label>
-        <label>接收目标<select id="channel-receive-type"><option value="chat_id">群聊（chat_id）</option><option value="user_id">个人（user_id）</option></select></label>
-        <label>接收目标 ID<input id="channel-receive-id" type="text" maxlength="512" autocomplete="off"></label>
-      </div>
-      <div id="channel-dingtalk-fields" class="channel-provider-fields" hidden>
-        <label>Webhook URL<input id="channel-webhook-url" type="password" maxlength="2048" autocomplete="new-password"></label>
-        <label class="balance-toggle"><input id="channel-signing-enabled" type="checkbox">启用加签</label>
-        <label id="channel-signing-secret-field">加签密钥<input id="channel-signing-secret" type="password" maxlength="512" autocomplete="new-password"></label>
-      </div>
-      <p id="channel-status" role="status"></p>
-      <div class="dialog-actions"><button id="channel-test" type="button" disabled>发送测试消息</button><button id="channel-save" type="submit" disabled>保存渠道</button></div>
-    </form>
+    <div class="settings-tabs" role="tablist" aria-label="监控设置">
+      <button id="settings-tab-balance" type="button" role="tab" data-settings-tab="balance" aria-selected="true" aria-controls="settings-panel-balance">余额设置</button>
+      <button id="settings-tab-notification" type="button" role="tab" data-settings-tab="notification" aria-selected="false" aria-controls="settings-panel-notification">报警渠道</button>
+    </div>
+    <section id="settings-panel-balance" role="tabpanel" aria-labelledby="settings-tab-balance">
+      <form id="balance-form">
+        <label class="balance-toggle"><input id="balance-enabled" type="checkbox">启用余额监控</label>
+        <label>总额度（元）<input id="balance-budget" type="number" min="0" max="999999999999" step="0.01" required></label>
+        <label>剩余额度报警阈值（元）<input id="balance-threshold" type="number" min="0" max="999999999999" step="0.01" required></label>
+        <label>累计起始月份（北京时间）<input id="balance-start" type="month" required></label>
+        <fieldset class="usage-channel-fieldset">
+          <legend>消费渠道</legend>
+          <p>取消勾选的渠道不计入后续本月消费和缺失月份归档；已有归档不会自动重算。</p>
+          <div class="usage-channel-actions"><button id="usage-channels-all" type="button">全选</button><button id="usage-channels-none" type="button">全不选</button></div>
+          <div id="usage-channel-options" class="usage-channel-options" aria-label="选择计入余额的消费渠道"></div>
+        </fieldset>
+        <p id="balance-settings-status" role="status"></p>
+        <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="balance-save" type="submit">保存余额设置</button></div>
+      </form>
+    </section>
+    <section id="settings-panel-notification" role="tabpanel" aria-labelledby="settings-tab-notification" hidden>
+      <form id="channel-form">
+        <label class="balance-toggle"><input id="channel-enabled" type="checkbox">启用渠道通知</label>
+        <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_webhook">钉钉自定义 Webhook 机器人</option></select></label>
+        <div id="channel-feishu-fields" class="channel-provider-fields">
+          <label>App ID<input id="channel-app-id" type="text" maxlength="512" autocomplete="off"></label>
+          <label>App Secret<input id="channel-secret" type="password" maxlength="512" autocomplete="new-password"></label>
+          <label>接收目标<select id="channel-receive-type"><option value="chat_id">群聊（chat_id）</option><option value="user_id">个人（user_id）</option></select></label>
+          <label>接收目标 ID<input id="channel-receive-id" type="text" maxlength="512" autocomplete="off"></label>
+        </div>
+        <div id="channel-dingtalk-fields" class="channel-provider-fields" hidden>
+          <label>Webhook URL<input id="channel-webhook-url" type="password" maxlength="2048" autocomplete="new-password"></label>
+          <label class="balance-toggle"><input id="channel-signing-enabled" type="checkbox">启用加签</label>
+          <label id="channel-signing-secret-field">加签密钥<input id="channel-signing-secret" type="password" maxlength="512" autocomplete="new-password"></label>
+        </div>
+        <p id="channel-status" role="status"></p>
+        <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="channel-test" type="button" disabled>发送测试消息</button><button id="channel-save" type="submit" disabled>保存渠道</button></div>
+      </form>
+    </section>
   </dialog>
   <dialog id="balance-alerts" class="balance-dialog balance-wide" aria-labelledby="balance-alerts-title">
     <div class="dialog-heading"><h2 id="balance-alerts-title">余额与警报</h2><button type="button" data-close="balance-alerts">关闭</button></div>

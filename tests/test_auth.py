@@ -69,6 +69,7 @@ class AuthTest(unittest.TestCase):
             "/statistics/api/usage/groups",
             "/statistics/api/usage/by-selection",
             "/statistics/api/export",
+            "/statistics/api/balance/usage-channels",
         ):
             self.assertEqual(client.get(route).status_code, 401)
             with patch(

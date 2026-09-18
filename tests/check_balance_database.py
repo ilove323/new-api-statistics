@@ -57,7 +57,7 @@ def main():
             )
             calls = []
 
-            def source(months, now):
+            def source(months, now, excluded_channel_ids=None):
                 if months:
                     calls.append(months)
                 return {m: Decimal(45) for m in months}
@@ -171,17 +171,19 @@ def main():
             # Query a small synthetic logs table, not New API's business tables.
             with connect() as conn:
                 conn.execute(
-                    "CREATE TABLE logs(created_at bigint,type integer,quota bigint)"
+                    "CREATE TABLE logs(created_at bigint,type integer,quota bigint,channel_id bigint)"
                 )
-                for moment, kind, quota in [
-                    (datetime(2025, 12, 31, 23, 59, 59, tzinfo=TZ), 2, 500000),
-                    (datetime(2026, 1, 1, tzinfo=TZ), 2, 1000000),
-                    (datetime(2026, 1, 1, tzinfo=TZ), 1, 9000000),
-                    (datetime(2026, 2, 1, tzinfo=TZ), 2, 1500000),
+                for moment, kind, quota, channel_id in [
+                    (datetime(2025, 12, 31, 23, 59, 59, tzinfo=TZ), 2, 500000, 1),
+                    (datetime(2026, 1, 1, tzinfo=TZ), 2, 1000000, 1),
+                    (datetime(2026, 1, 1, tzinfo=TZ), 1, 9000000, 1),
+                    (datetime(2026, 1, 2, tzinfo=TZ), 2, 5000000, 2),
+                    (datetime(2026, 1, 3, tzinfo=TZ), 2, 1500000, None),
+                    (datetime(2026, 2, 1, tzinfo=TZ), 2, 1500000, 1),
                 ]:
                     conn.execute(
-                        "INSERT INTO logs VALUES (%s,%s,%s)",
-                        (int(moment.timestamp()), kind, quota),
+                        "INSERT INTO logs VALUES (%s,%s,%s,%s)",
+                        (int(moment.timestamp()), kind, quota, channel_id),
                     )
             with patch("new_api_statistics.balance.psycopg.connect", connect):
                 amounts = balance.source_amounts(
@@ -190,9 +192,16 @@ def main():
                 )
             assert amounts == {
                 date(2025, 12, 1): Decimal(1),
-                date(2026, 1, 1): Decimal(2),
+                date(2026, 1, 1): Decimal(15),
                 date(2026, 2, 1): Decimal(3),
             }
+            with patch("new_api_statistics.balance.psycopg.connect", connect):
+                filtered = balance.source_amounts(
+                    [date(2026, 1, 1)],
+                    datetime(2026, 2, 1, tzinfo=TZ),
+                    [2],
+                )
+            assert filtered == {date(2026, 1, 1): Decimal(5)}
             # Simulate an older installation with multiple resolved alerts and reads.
             with connect() as conn:
                 conn.execute("DROP TABLE schema_migrations")

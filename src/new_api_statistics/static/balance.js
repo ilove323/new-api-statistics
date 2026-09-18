@@ -45,7 +45,29 @@ function refreshBalance(live=$('balance-alerts').open){
   })();
   return balanceLoading;
 }
+function setSettingsTab(tab){
+  document.querySelectorAll('[data-settings-tab]').forEach(button=>{
+    const active=button.dataset.settingsTab===tab;
+    button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;
+    $(`settings-panel-${button.dataset.settingsTab}`).hidden=!active;
+  });
+}
+document.querySelectorAll('[data-settings-tab]').forEach(button=>button.addEventListener('click',()=>setSettingsTab(button.dataset.settingsTab)));
+function renderUsageChannels(rows){
+  $('usage-channel-options').replaceChildren();
+  if(!rows.length){const empty=document.createElement('span');empty.className='usage-channel-empty';empty.textContent='暂无可选渠道';$('usage-channel-options').append(empty);return;}
+  for(const row of rows){
+    const label=document.createElement('label'),input=document.createElement('input');
+    input.type='checkbox';input.value=row.channel_id;input.checked=row.included;
+    const status=Number(row.channel_status)===1?'':`（状态 ${row.channel_status}）`;
+    label.append(input,document.createTextNode(`#${row.channel_id} ${row.channel_name}${status}`));$('usage-channel-options').append(label);
+  }
+}
+async function loadUsageChannels(){
+  const data=await balanceRequest('/usage-channels');renderUsageChannels(data.rows||[]);
+}
 $('balance-gear').addEventListener('click',async()=>{
+  setSettingsTab('balance');
   $('balance-settings').showModal();$('balance-save').disabled=true;$('balance-settings-status').textContent='正在读取设置…';
   channelVersion=null;channelDirty=false;$('channel-secret').value='';$('channel-webhook-url').value='';$('channel-signing-secret').value='';channelButtons();
   $('channel-status').textContent='正在读取渠道配置…';
@@ -54,7 +76,7 @@ $('balance-gear').addEventListener('click',async()=>{
     if(!data?.configured){$('balance-settings-status').textContent='余额监控数据库尚未配置，请稍后重试。';return;}
     const s=data.settings;balanceVersion=s.version;
     $('balance-enabled').checked=s.enabled;$('balance-budget').value=s.budget;$('balance-threshold').value=s.threshold;$('balance-start').value=s.start_month.slice(0,7);
-    $('balance-settings-status').textContent='';$('balance-save').disabled=false;
+    await loadUsageChannels();$('balance-settings-status').textContent='';$('balance-save').disabled=false;
     await loadChannel();
   }catch(e){$('balance-settings-status').textContent=e.message;}
 });
@@ -72,11 +94,14 @@ $('balance-form').addEventListener('submit',async event=>{
   event.preventDefault();$('balance-save').disabled=true;
   $('balance-settings-status').textContent='正在保存设置并归档历史月份…';
   try{
-    await balanceRequest('/settings',balanceWrite('PUT',{enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion}));
+    const excluded_channel_ids=[...document.querySelectorAll('#usage-channel-options input:not(:checked)')].map(input=>Number(input.value));
+    await balanceRequest('/settings',balanceWrite('PUT',{enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion,excluded_channel_ids}));
     $('balance-settings').close();$('balance-alerts').showModal();await refreshBalance();
   }catch(e){$('balance-settings-status').textContent=e.message;}
   finally{$('balance-save').disabled=false;}
 });
+$('usage-channels-all').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=true));
+$('usage-channels-none').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=false));
 function channelButtons(){
   for(const id of ['channel-enabled','channel-type','channel-app-id','channel-secret','channel-receive-type','channel-receive-id','channel-webhook-url','channel-signing-enabled','channel-signing-secret']){
     $(id).disabled=channelBusy||channelVersion===null;
