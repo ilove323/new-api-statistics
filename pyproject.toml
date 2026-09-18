@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "new-api-statistics"
-version = "0.1.0"
+version = "0.1.1"
 description = "Self-hosted New API usage reports and balance monitoring"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -49,7 +49,7 @@ def main():
                     conn.execute(
                         "SELECT count(*) AS n FROM schema_migrations"
                     ).fetchone()["n"]
-                    == 3
+                    == 4
                 )
                 assert (
                     conn.execute(
@@ -89,6 +89,76 @@ def main():
                 conn.execute(
                     sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
                 )
+
+    schema = "migration_v010_" + uuid.uuid4().hex
+    with psycopg.connect(dsn) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+
+    def v010_connect():
+        return psycopg.connect(
+            dsn, row_factory=dict_row, options="-c search_path=" + schema
+        )
+
+    try:
+        with v010_connect() as conn:
+            conn.execute("""CREATE TABLE schema_migrations (
+                version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())""")
+            conn.execute(
+                "INSERT INTO schema_migrations(version) VALUES ('001_initial.sql')"
+            )
+            conn.execute("""CREATE TABLE balance_settings (
+                id integer PRIMARY KEY, budget numeric(24,6) NOT NULL DEFAULT 0,
+                threshold numeric(24,6) NOT NULL DEFAULT 0, start_month date NOT NULL,
+                enabled boolean NOT NULL DEFAULT false, version bigint NOT NULL DEFAULT 1,
+                updated_at timestamptz NOT NULL DEFAULT now(), updated_by text)""")
+            conn.execute("""CREATE TABLE balance_months (
+                month date PRIMARY KEY, amount numeric(24,6) NOT NULL,
+                archived_at timestamptz NOT NULL DEFAULT now())""")
+            conn.execute("""CREATE TABLE notification_settings (
+                id integer PRIMARY KEY, version bigint NOT NULL DEFAULT 1,
+                enabled boolean NOT NULL DEFAULT false, channel text NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT now(), updated_by text,
+                last_attempt_at timestamptz, last_success_at timestamptz, last_error text)""")
+            conn.execute("""INSERT INTO notification_settings(id,enabled,channel)
+                VALUES (1,true,'dingtalk_app')""")
+            conn.execute("""CREATE TABLE notification_feishu_settings (
+                id integer PRIMARY KEY, app_id text NOT NULL DEFAULT '',
+                secret_encrypted text NOT NULL DEFAULT '',
+                receive_id_type text NOT NULL DEFAULT 'chat_id',receive_id text NOT NULL DEFAULT '')""")
+            conn.execute("""CREATE TABLE notification_dingtalk_settings (
+                id integer PRIMARY KEY, client_id text NOT NULL DEFAULT '',
+                secret_encrypted text NOT NULL DEFAULT '',robot_code text NOT NULL DEFAULT '',
+                open_conversation_id text NOT NULL DEFAULT '')""")
+        with patch.object(balance, "connect", v010_connect):
+            balance.initialize()
+            balance.initialize()
+        with v010_connect() as conn:
+            assert (
+                conn.execute("SELECT count(*) AS n FROM schema_migrations").fetchone()[
+                    "n"
+                ]
+                == 4
+            )
+            settings = conn.execute(
+                "SELECT * FROM notification_settings WHERE id=1"
+            ).fetchone()
+            assert settings["channel"] == "dingtalk_webhook"
+            assert not settings["enabled"]
+            assert "重新配置" in settings["last_error"]
+            assert conn.execute(
+                "SELECT to_regclass('notification_dingtalk_webhook_settings') AS name"
+            ).fetchone()["name"]
+            assert (
+                conn.execute(
+                    "SELECT to_regclass('notification_dingtalk_settings') AS name"
+                ).fetchone()["name"]
+                is None
+            )
+    finally:
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+            )
     print("PASS: fresh install, legacy migration, idempotency and data preservation")
 
 

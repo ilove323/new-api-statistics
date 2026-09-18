@@ -2,9 +2,18 @@
 
 ## Unreleased
 
-- Replace DingTalk enterprise application delivery with an encrypted custom Webhook robot configuration.
-- Add multi-select user and model filters scoped to the user-model detail table.
-- Add persistent column visibility controls to the user-model detail table.
+## 0.1.1 - 2026-09-18
+
+- Add searchable multi-select user, model, token and group filters to the usage detail table.
+- Add token/model aggregation modes and context-aware detail column visibility controls.
+- Place New API display names next to usernames in Excel exports.
+- Replace DingTalk enterprise application delivery with an encrypted custom Webhook robot configuration and optional signing.
+- Archive monthly billing by channel ID while retaining disabled and deleted channels and synchronizing channel renames.
+- Apply channel exclusions dynamically to archived totals, remaining balance and alerts without deleting raw channel history.
+- Add guarded historical billing recalculation with monthly comparison and explicit confirmation before replacement.
+- Add upgrade migrations for channel exclusions, per-channel archives and v0.1.0 DingTalk configuration compatibility.
+
+See [release notes](docs/releases/v0.1.1.md) for upgrade requirements and behavior changes.
 
 ## 0.1.0 - 2026-09-17
 

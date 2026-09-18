@@ -101,8 +101,8 @@ https://<你的域名>/statistics/
 使用 **New API 管理员账号密码**登录。
 
 没有 Nginx 时，可按[直接端口访问说明](docs/deployment.md#无-nginx-直接访问)配置宿主机端口。
-镜像部署可下载 [v0.1.0 Release](https://github.com/ilove323/new-api-statistics/releases/tag/v0.1.0)
-中的配置文件，设置 `IMAGE_TAG=0.1.0`，按[发版说明](docs/releasing.md)启动。
+镜像部署可下载 [v0.1.1 Release](https://github.com/ilove323/new-api-statistics/releases/tag/v0.1.1)
+中的配置文件，设置 `IMAGE_TAG=0.1.1`，按[发版说明](docs/releasing.md)启动。
 
 ## 文档
 
