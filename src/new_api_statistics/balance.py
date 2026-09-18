@@ -194,6 +194,10 @@ class ArchiveDataMissing(Exception):
     """Per-channel archives cannot be safely rebuilt from incomplete source logs."""
 
 
+class HistoryPreviewChanged(Exception):
+    """The source data or settings changed after the history preview."""
+
+
 def replace_excluded_channels(conn, channel_ids, username):
     if channel_ids is None:
         return
@@ -248,6 +252,105 @@ def save_settings(body, username):
             )
         archive_missing(conn, row["start_month"], datetime.now(TZ))
     return row
+
+
+def history_calculation(conn, body, now):
+    """Read complete per-channel history and build a protected monthly comparison."""
+    values = validate_settings(body)
+    excluded_channel_ids = values.pop("excluded_channel_ids")
+    if excluded_channel_ids is None:
+        raise ValueError("请重新打开设置并刷新消费渠道后再追溯。")
+    current = now.date().replace(day=1)
+    months = month_list(values["start_month"], current)
+    if not months:
+        raise ValueError("当前起始月份没有可追溯的历史归档。")
+    settings = conn.execute(
+        "SELECT version FROM balance_settings WHERE id=1"
+    ).fetchone()
+    if not settings or settings["version"] != values["version"]:
+        raise SettingsConflict()
+    archived = {
+        row["month"]: row["amount"]
+        for row in conn.execute(
+            "SELECT month,amount FROM balance_months WHERE month >= %s AND month < %s",
+            (values["start_month"], current),
+        ).fetchall()
+    }
+    details = source_channel_amounts(months, now)
+    if not any(details.values()):
+        raise ArchiveDataMissing()
+    amounts = {
+        month: sum((row["amount"] for row in details.get(month, [])), Decimal(0))
+        for month in months
+    }
+    return values, excluded_channel_ids, months, archived, details, amounts
+
+
+def history_preview(body, now=None):
+    """Return the complete monthly comparison that an administrator must confirm."""
+    now = (now or datetime.now(TZ)).astimezone(TZ)
+    with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(90216321)")
+        values, _, months, archived, _, amounts = history_calculation(conn, body, now)
+    return {
+        "version": values["version"],
+        "rows": [
+            {
+                "month": month.strftime("%Y-%m"),
+                "before": str(archived.get(month, Decimal(0))),
+                "after": str(amounts[month]),
+            }
+            for month in months
+        ],
+    }
+
+
+def validate_history_preview(rows):
+    if not isinstance(rows, list) or not rows or len(rows) > 1200:
+        raise ValueError("历史计费预览无效，请重新预览。")
+    result = {}
+    try:
+        for row in rows:
+            month = datetime.strptime(row["month"], "%Y-%m").date()
+            before = Decimal(str(row["before"]))
+            after = Decimal(str(row["after"]))
+            if (
+                month in result
+                or month.strftime("%Y-%m") != row["month"]
+                or not before.is_finite()
+                or not after.is_finite()
+                or before < 0
+                or after < 0
+            ):
+                raise ValueError()
+            result[month] = (before, after)
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        raise ValueError("历史计费预览无效，请重新预览。") from None
+    return result
+
+
+def recalculate_history(body, preview_rows, username, now=None):
+    """Replace history with complete per-channel data after exact monthly review."""
+    expected = validate_history_preview(preview_rows)
+    now = (now or datetime.now(TZ)).astimezone(TZ)
+    with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(90216321)")
+        values, excluded, months, archived, details, amounts = history_calculation(
+            conn, body, now
+        )
+        actual = {
+            month: (archived.get(month, Decimal(0)), amounts[month]) for month in months
+        }
+        if expected != actual:
+            raise HistoryPreviewChanged()
+        row = update_settings(conn, values, username)
+        replace_excluded_channels(conn, excluded, username)
+        audit_settings(conn, row, username)
+        write_channel_archives(conn, months, details)
+        sync_channel_inventory(conn, source_channels())
+        if not row["enabled"]:
+            conn.execute("DELETE FROM balance_alerts")
+    return {"version": row["version"], "months": len(months)}
 
 
 def archived_month_rows(conn, first, end, excluded_channel_ids):

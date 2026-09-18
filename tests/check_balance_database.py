@@ -373,13 +373,81 @@ def main():
                 restored = balance.archived_month_rows(conn, first, rollover.date(), [])
                 assert [row["amount"] for row in restored] == [45, 45, 45]
 
+            def refreshed_channels(months, now):
+                return {
+                    month: [
+                        {
+                            "channel_id": 1,
+                            "channel_name": "日志旧名称",
+                            "amount": Decimal(29),
+                        },
+                        {
+                            "channel_id": 2,
+                            "channel_name": "备用渠道",
+                            "amount": Decimal(15),
+                        },
+                    ]
+                    for month in months
+                }
+
+            with connect() as conn:
+                current_settings = conn.execute(
+                    "SELECT * FROM balance_settings WHERE id=1"
+                ).fetchone()
+            history_body = {
+                "budget": str(current_settings["budget"]),
+                "threshold": str(current_settings["threshold"]),
+                "enabled": current_settings["enabled"],
+                "start_month": first.strftime("%Y-%m"),
+                "version": current_settings["version"],
+                "excluded_channel_ids": [],
+            }
+            with (
+                patch(
+                    "new_api_statistics.balance.source_channel_amounts",
+                    refreshed_channels,
+                ),
+                patch(
+                    "new_api_statistics.balance.source_channels",
+                    return_value=renamed_live,
+                ),
+            ):
+                preview = balance.history_preview(history_body, rollover)
+                assert [Decimal(row["before"]) for row in preview["rows"]] == [
+                    Decimal(45)
+                ] * 3
+                assert [Decimal(row["after"]) for row in preview["rows"]] == [
+                    Decimal(44)
+                ] * 3
+                result = balance.recalculate_history(
+                    history_body, preview["rows"], "test_admin", rollover
+                )
+            assert result == {
+                "version": current_settings["version"] + 1,
+                "months": 3,
+            }
+            with connect() as conn:
+                assert {
+                    row["amount"]
+                    for row in conn.execute(
+                        "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (first, rollover.date()),
+                    ).fetchall()
+                } == {Decimal(44)}
+                assert {
+                    row["channel_name"]
+                    for row in conn.execute(
+                        "SELECT channel_name FROM balance_month_channels WHERE channel_id=1"
+                    ).fetchall()
+                } == {"主渠道再次改名"}
+
             def incomplete_channels(months, now):
                 return {
                     month: [
                         {
                             "channel_id": 1,
                             "channel_name": "主渠道再次改名",
-                            "amount": Decimal(44),
+                            "amount": Decimal(43),
                         }
                     ]
                     for month in months
@@ -407,7 +475,7 @@ def main():
                         "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
                         (first, rollover.date()),
                     ).fetchall()
-                } == {Decimal(45)}
+                } == {Decimal(44)}
             # Simulate an older installation with multiple resolved alerts and reads.
             with connect() as conn:
                 conn.execute("DROP TABLE schema_migrations")

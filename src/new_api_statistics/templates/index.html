@@ -115,6 +115,7 @@
           <p>所有渠道都会完整归档。取消勾选的渠道仅不计入消费统计、剩余额度和报警。</p>
           <div class="usage-channel-actions"><button id="usage-channels-all" type="button">全选</button><button id="usage-channels-none" type="button">全不选</button></div>
           <div id="usage-channel-options" class="usage-channel-options" aria-label="选择计入余额的消费渠道"></div>
+          <button id="balance-recalculate" class="danger-button" type="button">追溯历史计费</button>
         </fieldset>
         <p id="balance-settings-status" role="status"></p>
         <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="balance-save" type="submit">保存余额设置</button></div>
@@ -139,6 +140,13 @@
         <div class="dialog-actions"><button type="button" data-close="balance-settings">关闭</button><button id="channel-test" type="button" disabled>发送测试消息</button><button id="channel-save" type="submit" disabled>保存渠道</button></div>
       </form>
     </section>
+  </dialog>
+  <dialog id="balance-history-preview" class="balance-dialog balance-wide" aria-labelledby="balance-history-preview-title">
+    <div class="dialog-heading"><h2 id="balance-history-preview-title">历史渠道计费对比</h2><button type="button" data-close="balance-history-preview">关闭</button></div>
+    <p>以下为完整渠道归档的逐月对比。确认后将覆盖累计起始月份至上月的渠道明细；消费渠道勾选不会删减原始归档。</p>
+    <div class="balance-table"><table><thead><tr><th>月份</th><th>原归档金额（元）</th><th>重新读取金额（元）</th><th>差额（元）</th></tr></thead><tbody id="balance-history-preview-rows"></tbody></table></div>
+    <p id="balance-history-preview-status" role="status"></p>
+    <div class="dialog-actions"><button type="button" data-close="balance-history-preview">取消</button><button id="balance-history-apply" class="danger-button" type="button">确认并覆盖渠道归档</button></div>
   </dialog>
   <dialog id="balance-alerts" class="balance-dialog balance-wide" aria-labelledby="balance-alerts-title">
     <div class="dialog-heading"><h2 id="balance-alerts-title">余额与警报</h2><button type="button" data-close="balance-alerts">关闭</button></div>

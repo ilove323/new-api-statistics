@@ -1,6 +1,7 @@
 /* Monitoring is site-wide and independent of report filters and Excel exports. */
 let balanceData=null,balanceVersion=null,balanceLoading=null,balanceLoadingLive=false;
 let channelVersion=null,channelDirty=false,channelBusy=false;
+let historyPreview=null;
 const balanceMoney=value=>value===null||value===undefined?'—':'¥ '+number(value,2);
 const balanceTime=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 async function balanceRequest(path,options={}){
@@ -104,6 +105,44 @@ $('balance-form').addEventListener('submit',async event=>{
   }catch(e){$('balance-settings-status').textContent=e.message;}
   finally{$('balance-save').disabled=false;}
 });
+$('balance-recalculate').addEventListener('click',async()=>{
+  const warnings=[
+    '追溯会重新读取累计起始月份至上月的完整渠道消费，并覆盖已有月度渠道归档。是否继续？',
+    '渠道启用状态和当前勾选不影响原始归档；如果查询失败或整个区间没有数据，系统会报错并保留旧归档。再次确认？',
+    '最后确认：确定读取并对比全部历史计费吗？',
+  ];
+  if(warnings.some(message=>!window.confirm(message)))return;
+  $('balance-recalculate').disabled=true;$('balance-save').disabled=true;
+  $('balance-settings-status').textContent='正在读取完整历史渠道计费，请勿关闭页面…';
+  try{
+    const settings=balanceSettingsBody();
+    const result=await balanceRequest('/recalculate-history/preview',balanceWrite('POST',settings));
+    historyPreview={settings,rows:result.rows};
+    $('balance-history-preview-rows').replaceChildren();
+    for(const row of result.rows){
+      const tr=document.createElement('tr');
+      cell(tr,row.month);cell(tr,balanceMoney(row.before));cell(tr,balanceMoney(row.after));cell(tr,balanceMoney(Number(row.after)-Number(row.before)));
+      $('balance-history-preview-rows').append(tr);
+    }
+    $('balance-history-preview-status').textContent='';
+    $('balance-settings-status').textContent='预览已生成，确认逐月对比后才会覆盖渠道归档。';
+    $('balance-history-preview').showModal();
+  }catch(e){$('balance-settings-status').textContent=e.message;}
+  finally{$('balance-recalculate').disabled=false;$('balance-save').disabled=false;}
+});
+$('balance-history-apply').addEventListener('click',async()=>{
+  if(!historyPreview)return;
+  $('balance-history-apply').disabled=true;
+  $('balance-history-preview-status').textContent='正在再次核对并写入完整渠道归档…';
+  try{
+    const result=await balanceRequest('/recalculate-history',balanceWrite('POST',{settings:historyPreview.settings,preview:historyPreview.rows}));
+    balanceVersion=result.version;historyPreview=null;
+    $('balance-history-preview').close();$('balance-settings').close();$('balance-alerts').showModal();
+    await refreshBalance(true);
+  }catch(e){$('balance-history-preview-status').textContent=e.message;}
+  finally{$('balance-history-apply').disabled=false;}
+});
+$('balance-history-preview').addEventListener('close',()=>{historyPreview=null;$('balance-history-preview-status').textContent='';});
 $('usage-channels-all').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=true));
 $('usage-channels-none').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=false));
 function channelButtons(){
