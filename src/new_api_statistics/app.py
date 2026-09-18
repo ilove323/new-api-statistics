@@ -16,7 +16,9 @@ from new_api_statistics import notifications
 from new_api_statistics.report import (
     TZ,
     export_excel,
+    load_group_options,
     load_report,
+    load_token_options,
     totals,
     parse_boundary,
     rankings,
@@ -85,9 +87,9 @@ def index():
     )
 
 
-def selected():
+def selected(*, by_token=False):
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    rows = load_report(start, end)
+    rows = load_report(start, end, by_token=by_token)
     user = request.args.get("user", "").strip()
     if user:
         rows = [r for r in rows if r["username"] == user]
@@ -108,6 +110,59 @@ def usage():
         rankings=rankings(rows),
         updated_at=datetime.now(TZ).isoformat(timespec="seconds"),
     )
+
+
+@app.get("/statistics/api/usage/by-token")
+def usage_by_token():
+    start, end, rows = selected(by_token=True)
+    return jsonify(start=start, end=end, rows=rows)
+
+
+@app.get("/statistics/api/usage/tokens")
+def usage_tokens():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    return jsonify(start=start, end=end, rows=load_token_options(start, end))
+
+
+@app.get("/statistics/api/usage/groups")
+def usage_groups():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    return jsonify(start=start, end=end, rows=load_group_options(start, end))
+
+
+def requested_token_ids():
+    values = request.args.getlist("token_id")
+    if len(values) > 500:
+        raise ValueError("请选择有效的令牌。")
+    if not values:
+        return None
+    try:
+        token_ids = sorted({int(value) for value in values})
+    except ValueError:
+        raise ValueError("请选择有效的令牌。") from None
+    if any(token_id < 0 for token_id in token_ids):
+        raise ValueError("请选择有效的令牌。")
+    return token_ids
+
+
+def requested_groups():
+    values = request.args.getlist("group")
+    if len(values) > 500 or any(len(value) > 128 for value in values):
+        raise ValueError("请选择有效的分组。")
+    return sorted(set(values)) or None
+
+
+@app.get("/statistics/api/usage/by-selection")
+def usage_by_selection():
+    start, end = request.args.get("start", ""), request.args.get("end", "")
+    token_ids, groups = requested_token_ids(), requested_groups()
+    if token_ids is None and groups is None:
+        raise ValueError("请选择令牌或分组。")
+    by_token = request.args.get("by_token", "0") == "1"
+    rows = load_report(
+        start, end, by_token=by_token, token_ids=token_ids, groups=groups
+    )
+    return jsonify(start=start, end=end, rows=rows)
 
 
 @app.get("/statistics/api/export")
@@ -156,6 +211,55 @@ def balance_settings():
     except balance.SettingsConflict:
         return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
     return jsonify(saved=True)
+
+
+@app.post("/statistics/api/balance/recalculate-history/preview")
+def balance_recalculate_history_preview():
+    if not monitor_write_allowed():
+        return jsonify(error="不允许的追溯请求。"), 403
+    try:
+        result = balance.history_preview(request.get_json())
+    except balance.SettingsConflict:
+        return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
+    except balance.ArchiveDataMissing:
+        return (
+            jsonify(error="New API 未返回历史消费数据，已取消追溯，原归档保持不变。"),
+            409,
+        )
+    return jsonify(result)
+
+
+@app.post("/statistics/api/balance/recalculate-history")
+def balance_recalculate_history():
+    if not monitor_write_allowed():
+        return jsonify(error="不允许的追溯请求。"), 403
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        return jsonify(error="历史计费预览无效，请重新预览。"), 400
+    try:
+        result = balance.recalculate_history(
+            payload.get("settings"),
+            payload.get("preview"),
+            request.authorization.username,
+        )
+    except balance.SettingsConflict:
+        return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
+    except balance.ArchiveDataMissing:
+        return (
+            jsonify(error="New API 未返回历史消费数据，已取消追溯，原归档保持不变。"),
+            409,
+        )
+    except balance.HistoryPreviewChanged:
+        return (
+            jsonify(error="历史计费数据在预览后发生变化，未写入新费用，请重新预览。"),
+            409,
+        )
+    return jsonify(recalculated=True, **result)
+
+
+@app.get("/statistics/api/balance/usage-channels")
+def balance_usage_channels():
+    return jsonify(rows=balance.usage_channels_snapshot())
 
 
 @app.post("/statistics/api/balance/check")

@@ -52,10 +52,9 @@ CREATE TABLE IF NOT EXISTS notification_feishu_settings (
     secret_encrypted text NOT NULL DEFAULT '', receive_id_type text NOT NULL DEFAULT 'chat_id',
     receive_id text NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS notification_dingtalk_settings (
-    id integer PRIMARY KEY CHECK (id=1), client_id text NOT NULL DEFAULT '',
-    secret_encrypted text NOT NULL DEFAULT '', robot_code text NOT NULL DEFAULT '',
-    open_conversation_id text NOT NULL DEFAULT ''
+CREATE TABLE IF NOT EXISTS notification_dingtalk_webhook_settings (
+    id integer PRIMARY KEY CHECK (id=1), webhook_encrypted text NOT NULL DEFAULT '',
+    secret_encrypted text NOT NULL DEFAULT '', signing_enabled boolean NOT NULL DEFAULT false
 );
 
 -- One-time migration from the former shared credential columns, then remove them.
@@ -69,19 +68,11 @@ BEGIN
             SELECT 1,app_id,secret_encrypted,receive_id_type,receive_id FROM notification_settings
             WHERE id=1 AND channel='feishu_app' ON CONFLICT (id) DO NOTHING
         $migration$;
-        IF EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema=current_schema() AND table_name='notification_settings'
-                     AND column_name='robot_code') THEN
-            EXECUTE $migration$
-                INSERT INTO notification_dingtalk_settings(id,client_id,secret_encrypted,robot_code,open_conversation_id)
-                SELECT 1,app_id,secret_encrypted,robot_code,receive_id FROM notification_settings
-                WHERE id=1 AND channel='dingtalk_app' ON CONFLICT (id) DO NOTHING
-            $migration$;
-        END IF;
     END IF;
 END $$;
 INSERT INTO notification_feishu_settings(id) VALUES (1) ON CONFLICT DO NOTHING;
-INSERT INTO notification_dingtalk_settings(id) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO notification_dingtalk_webhook_settings(id) VALUES (1) ON CONFLICT DO NOTHING;
+DROP TABLE IF EXISTS notification_dingtalk_settings;
 ALTER TABLE notification_settings DROP COLUMN IF EXISTS app_id;
 ALTER TABLE notification_settings DROP COLUMN IF EXISTS secret_encrypted;
 ALTER TABLE notification_settings DROP COLUMN IF EXISTS robot_code;

@@ -64,7 +64,12 @@ class AuthTest(unittest.TestCase):
             "/statistics/",
             "/statistics/static/app.js",
             "/statistics/api/usage",
+            "/statistics/api/usage/by-token",
+            "/statistics/api/usage/tokens",
+            "/statistics/api/usage/groups",
+            "/statistics/api/usage/by-selection",
             "/statistics/api/export",
+            "/statistics/api/balance/usage-channels",
         ):
             self.assertEqual(client.get(route).status_code, 401)
             with patch(

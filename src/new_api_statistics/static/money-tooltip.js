@@ -14,9 +14,9 @@ function rowMoneyFormula(row){
   lines.push(`计算金额：${f.calculated===null?'无法完整计算（缺少单价或倍率）':'¥ '+moneyNumber(f.calculated)}`);
   lines.push(`实际消费金额：¥ ${moneyNumber(row.amount)}`);
   if(f.difference!==null)lines.push(`差额（实际 − 计算）：¥ ${moneyNumber(f.difference)}`);
-  lines.push('计算使用当前单价和最后倍率；实际金额来自消费日志汇总。');
+  lines.push('计算使用当前单价和倍率；实际金额来自消费日志汇总。');
   if(f.converted)lines.push('缓存读使用数学折算后的整数，四舍五入可能产生尾差。');
-  else if(f.ratio_count>1)lines.push('区间存在多种历史倍率，按最后倍率重算可能与实际金额不同。');
+  else if(f.ratio_count>1)lines.push('区间存在多种历史倍率，按当前显示倍率重算可能与实际金额不同。');
   return lines;
 }
 function totalMoneyFormula(rows,total){

@@ -84,9 +84,12 @@ class BalanceTest(unittest.TestCase):
         )
 
     def test_validation(self):
-        result = balance.validate_settings(self.body(), date(2026, 2, 10))
+        result = balance.validate_settings(
+            self.body(excluded_channel_ids=[7, 2]), date(2026, 2, 10)
+        )
         self.assertEqual(result["budget"], Decimal(100))
         self.assertEqual(result["start_month"], date(2026, 1, 1))
+        self.assertEqual(result["excluded_channel_ids"], [2, 7])
         for changes in [
             dict(budget="NaN"),
             dict(threshold="Infinity"),
@@ -96,9 +99,90 @@ class BalanceTest(unittest.TestCase):
             dict(version=True),
             dict(start_month="2026-03"),
             dict(start_month="2026-1"),
+            dict(excluded_channel_ids="2"),
+            dict(excluded_channel_ids=[True]),
+            dict(excluded_channel_ids=[2, 2]),
+            dict(excluded_channel_ids=[-1]),
         ]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 balance.validate_settings(self.body(**changes), date(2026, 2, 10))
+
+    def test_usage_channels_endpoint(self):
+        rows = [
+            {
+                "channel_id": 1,
+                "channel_name": "主渠道",
+                "channel_status": 1,
+                "included": True,
+            }
+        ]
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.balance.usage_channels_snapshot",
+                return_value=rows,
+            ),
+        ):
+            response = app.test_client().get(
+                "/statistics/api/balance/usage-channels",
+                auth=("test_admin", "test"),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"rows": rows})
+
+    def test_recalculate_history_endpoints(self):
+        client = app.test_client()
+        body = self.body(excluded_channel_ids=[2])
+        preview_rows = [{"month": "2026-01", "before": "10", "after": "12"}]
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.balance.history_preview",
+                return_value={"version": 1, "rows": preview_rows},
+            ) as preview,
+            patch(
+                "new_api_statistics.balance.recalculate_history",
+                return_value={"version": 2, "months": 1},
+            ) as recalculate,
+        ):
+            preview_url = "/statistics/api/balance/recalculate-history/preview"
+            apply_url = "/statistics/api/balance/recalculate-history"
+            self.assertEqual(
+                client.post(
+                    preview_url, json=body, auth=("test_admin", "test")
+                ).status_code,
+                403,
+            )
+            response = client.post(
+                preview_url,
+                json=body,
+                auth=("test_admin", "test"),
+                headers={"X-Statistics-Request": "1"},
+            )
+            self.assertEqual(response.get_json()["rows"], preview_rows)
+            preview.assert_called_once_with(body)
+            payload = {"settings": body, "preview": preview_rows}
+            response = client.post(
+                apply_url,
+                json=payload,
+                auth=("test_admin", "test"),
+                headers={"X-Statistics-Request": "1"},
+            )
+            self.assertEqual(
+                response.get_json(),
+                {"recalculated": True, "version": 2, "months": 1},
+            )
+            recalculate.assert_called_once_with(body, preview_rows, "test_admin")
+            recalculate.side_effect = balance.HistoryPreviewChanged()
+            self.assertEqual(
+                client.post(
+                    apply_url,
+                    json=payload,
+                    auth=("test_admin", "test"),
+                    headers={"X-Statistics-Request": "1"},
+                ).status_code,
+                409,
+            )
 
     def test_month_boundaries(self):
         self.assertEqual(

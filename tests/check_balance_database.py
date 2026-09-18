@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 from new_api_statistics import balance
 from new_api_statistics import notifications
 from cryptography.fernet import Fernet
-from new_api_statistics.notification_channels import feishu_app
+from new_api_statistics.notification_channels import dingtalk_webhook, feishu_app
 from new_api_statistics.notification_channels.base import DeliveryError
 from new_api_statistics.report import TZ
 
@@ -57,12 +57,40 @@ def main():
             )
             calls = []
 
-            def source(months, now):
+            def source(months, now, excluded_channel_ids=None):
                 if months:
                     calls.append(months)
                 return {m: Decimal(45) for m in months}
 
-            with patch("new_api_statistics.balance.source_amounts", source):
+            def channel_source(months, now):
+                if months:
+                    calls.append(months)
+                return {
+                    month: [
+                        {
+                            "channel_id": 1,
+                            "channel_name": "主渠道",
+                            "amount": Decimal(45),
+                        }
+                    ]
+                    for month in months
+                }
+
+            with (
+                patch(
+                    "new_api_statistics.balance.source_channel_amounts", channel_source
+                ),
+                patch(
+                    "new_api_statistics.balance.source_channels",
+                    return_value=[
+                        {
+                            "channel_id": 1,
+                            "channel_name": "主渠道",
+                            "channel_status": 1,
+                        }
+                    ],
+                ),
+            ):
                 balance.save_settings(body, "test_admin")
             assert calls == [[first, previous]], calls
             balance.check_once(when, source, daily=False)
@@ -171,17 +199,32 @@ def main():
             # Query a small synthetic logs table, not New API's business tables.
             with connect() as conn:
                 conn.execute(
-                    "CREATE TABLE logs(created_at bigint,type integer,quota bigint)"
+                    """CREATE TABLE logs(created_at bigint,type integer,quota bigint,
+                       channel_id bigint,channel_name text)"""
                 )
-                for moment, kind, quota in [
-                    (datetime(2025, 12, 31, 23, 59, 59, tzinfo=TZ), 2, 500000),
-                    (datetime(2026, 1, 1, tzinfo=TZ), 2, 1000000),
-                    (datetime(2026, 1, 1, tzinfo=TZ), 1, 9000000),
-                    (datetime(2026, 2, 1, tzinfo=TZ), 2, 1500000),
+                for moment, kind, quota, channel_id, channel_name in [
+                    (
+                        datetime(2025, 12, 31, 23, 59, 59, tzinfo=TZ),
+                        2,
+                        500000,
+                        1,
+                        "主渠道",
+                    ),
+                    (datetime(2026, 1, 1, tzinfo=TZ), 2, 1000000, 1, "主渠道"),
+                    (datetime(2026, 1, 1, tzinfo=TZ), 1, 9000000, 1, "主渠道"),
+                    (datetime(2026, 1, 2, tzinfo=TZ), 2, 5000000, 2, "备用渠道"),
+                    (datetime(2026, 1, 3, tzinfo=TZ), 2, 1500000, None, ""),
+                    (datetime(2026, 2, 1, tzinfo=TZ), 2, 1500000, 1, "主渠道"),
                 ]:
                     conn.execute(
-                        "INSERT INTO logs VALUES (%s,%s,%s)",
-                        (int(moment.timestamp()), kind, quota),
+                        "INSERT INTO logs VALUES (%s,%s,%s,%s,%s)",
+                        (
+                            int(moment.timestamp()),
+                            kind,
+                            quota,
+                            channel_id,
+                            channel_name,
+                        ),
                     )
             with patch("new_api_statistics.balance.psycopg.connect", connect):
                 amounts = balance.source_amounts(
@@ -190,9 +233,249 @@ def main():
                 )
             assert amounts == {
                 date(2025, 12, 1): Decimal(1),
-                date(2026, 1, 1): Decimal(2),
+                date(2026, 1, 1): Decimal(15),
                 date(2026, 2, 1): Decimal(3),
             }
+            with patch("new_api_statistics.balance.psycopg.connect", connect):
+                filtered = balance.source_amounts(
+                    [date(2026, 1, 1)],
+                    datetime(2026, 2, 1, tzinfo=TZ),
+                    [2],
+                )
+            assert filtered == {date(2026, 1, 1): Decimal(5)}
+            with patch("new_api_statistics.balance.psycopg.connect", connect):
+                detailed = balance.source_amounts_with_raw(
+                    [date(2026, 1, 1)],
+                    datetime(2026, 2, 1, tzinfo=TZ),
+                    [2],
+                )
+            assert detailed == {
+                date(2026, 1, 1): {"raw": Decimal(15), "filtered": Decimal(5)}
+            }
+            with patch("new_api_statistics.balance.psycopg.connect", connect):
+                channel_amounts = balance.source_channel_amounts(
+                    [date(2026, 1, 1)], datetime(2026, 2, 1, tzinfo=TZ)
+                )
+            assert {
+                row["channel_id"]: row["amount"]
+                for row in channel_amounts[date(2026, 1, 1)]
+            } == {1: Decimal(2), 2: Decimal(10), None: Decimal(3)}
+
+            def complete_channels(months, now):
+                return {
+                    month: [
+                        {
+                            "channel_id": 1,
+                            "channel_name": "日志旧名称",
+                            "amount": Decimal(30),
+                        },
+                        {
+                            "channel_id": 2,
+                            "channel_name": "备用渠道",
+                            "amount": Decimal(15),
+                        },
+                    ]
+                    for month in months
+                }
+
+            live_channels = [
+                {
+                    "channel_id": 1,
+                    "channel_name": "主渠道新名称",
+                    "channel_status": 1,
+                },
+                {
+                    "channel_id": 2,
+                    "channel_name": "备用渠道",
+                    "channel_status": 2,
+                },
+            ]
+            with (
+                patch(
+                    "new_api_statistics.balance.source_channel_amounts",
+                    complete_channels,
+                ),
+                patch(
+                    "new_api_statistics.balance.source_channels",
+                    return_value=live_channels,
+                ),
+            ):
+                rebuilt = balance.rebuild_channel_archives(rollover)
+                inventory = balance.usage_channels_snapshot()
+            assert rebuilt == {"months": 3, "channels": 2}
+            assert [
+                (row["channel_id"], row["deleted"], row["channel_status"])
+                for row in inventory
+            ] == [
+                (1, False, 1),
+                (2, False, 2),
+            ]
+            with connect() as conn:
+                assert (
+                    conn.execute(
+                        "SELECT count(*) AS n FROM balance_month_channels"
+                    ).fetchone()["n"]
+                    == 6
+                )
+                assert {
+                    row["channel_name"]
+                    for row in conn.execute(
+                        "SELECT channel_name FROM balance_month_channels WHERE channel_id=1"
+                    ).fetchall()
+                } == {"主渠道新名称"}
+                unfiltered = balance.archived_month_rows(
+                    conn, first, rollover.date(), []
+                )
+                filtered_rows = balance.archived_month_rows(
+                    conn, first, rollover.date(), [2]
+                )
+                assert [row["amount"] for row in unfiltered] == [45, 45, 45]
+                assert [row["amount"] for row in filtered_rows] == [30, 30, 30]
+                balance.replace_excluded_channels(conn, [2], "test_admin")
+
+            # A missing live ID remains filterable as a deleted inventory channel.
+            renamed_live = [
+                {
+                    "channel_id": 1,
+                    "channel_name": "主渠道再次改名",
+                    "channel_status": 1,
+                }
+            ]
+            with patch(
+                "new_api_statistics.balance.source_channels",
+                return_value=renamed_live,
+            ):
+                inventory = balance.usage_channels_snapshot()
+            assert inventory == [
+                {
+                    "channel_id": 1,
+                    "channel_name": "主渠道再次改名",
+                    "channel_status": 1,
+                    "deleted": False,
+                    "included": True,
+                },
+                {
+                    "channel_id": 2,
+                    "channel_name": "备用渠道",
+                    "channel_status": None,
+                    "deleted": True,
+                    "included": False,
+                },
+            ]
+            with connect() as conn:
+                assert {
+                    row["channel_name"]
+                    for row in conn.execute(
+                        "SELECT channel_name FROM balance_month_channels WHERE channel_id=1"
+                    ).fetchall()
+                } == {"主渠道再次改名"}
+                balance.replace_excluded_channels(conn, [], "test_admin")
+                restored = balance.archived_month_rows(conn, first, rollover.date(), [])
+                assert [row["amount"] for row in restored] == [45, 45, 45]
+
+            def refreshed_channels(months, now):
+                return {
+                    month: [
+                        {
+                            "channel_id": 1,
+                            "channel_name": "日志旧名称",
+                            "amount": Decimal(29),
+                        },
+                        {
+                            "channel_id": 2,
+                            "channel_name": "备用渠道",
+                            "amount": Decimal(15),
+                        },
+                    ]
+                    for month in months
+                }
+
+            with connect() as conn:
+                current_settings = conn.execute(
+                    "SELECT * FROM balance_settings WHERE id=1"
+                ).fetchone()
+            history_body = {
+                "budget": str(current_settings["budget"]),
+                "threshold": str(current_settings["threshold"]),
+                "enabled": current_settings["enabled"],
+                "start_month": first.strftime("%Y-%m"),
+                "version": current_settings["version"],
+                "excluded_channel_ids": [],
+            }
+            with (
+                patch(
+                    "new_api_statistics.balance.source_channel_amounts",
+                    refreshed_channels,
+                ),
+                patch(
+                    "new_api_statistics.balance.source_channels",
+                    return_value=renamed_live,
+                ),
+            ):
+                preview = balance.history_preview(history_body, rollover)
+                assert [Decimal(row["before"]) for row in preview["rows"]] == [
+                    Decimal(45)
+                ] * 3
+                assert [Decimal(row["after"]) for row in preview["rows"]] == [
+                    Decimal(44)
+                ] * 3
+                result = balance.recalculate_history(
+                    history_body, preview["rows"], "test_admin", rollover
+                )
+            assert result == {
+                "version": current_settings["version"] + 1,
+                "months": 3,
+            }
+            with connect() as conn:
+                assert {
+                    row["amount"]
+                    for row in conn.execute(
+                        "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (first, rollover.date()),
+                    ).fetchall()
+                } == {Decimal(44)}
+                assert {
+                    row["channel_name"]
+                    for row in conn.execute(
+                        "SELECT channel_name FROM balance_month_channels WHERE channel_id=1"
+                    ).fetchall()
+                } == {"主渠道再次改名"}
+
+            def incomplete_channels(months, now):
+                return {
+                    month: [
+                        {
+                            "channel_id": 1,
+                            "channel_name": "主渠道再次改名",
+                            "amount": Decimal(43),
+                        }
+                    ]
+                    for month in months
+                }
+
+            try:
+                with patch(
+                    "new_api_statistics.balance.source_channel_amounts",
+                    incomplete_channels,
+                ):
+                    balance.rebuild_channel_archives(rollover)
+                raise AssertionError("incomplete source replaced channel archives")
+            except balance.ArchiveDataMissing:
+                pass
+            with connect() as conn:
+                assert (
+                    conn.execute(
+                        "SELECT count(*) AS n FROM balance_month_channels"
+                    ).fetchone()["n"]
+                    == 6
+                )
+                assert {
+                    row["amount"]
+                    for row in conn.execute(
+                        "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (first, rollover.date()),
+                    ).fetchall()
+                } == {Decimal(44)}
             # Simulate an older installation with multiple resolved alerts and reads.
             with connect() as conn:
                 conn.execute("DROP TABLE schema_migrations")
@@ -240,7 +523,6 @@ def main():
                     channel="feishu_app",
                     app_id="cli_fixture",
                     app_secret="fixture-secret",
-                    robot_code="",
                     receive_id_type="user_id",
                     receive_id="employee123",
                 )
@@ -272,13 +554,19 @@ def main():
                         & columns
                     )
                     assert conn.execute(
-                        "SELECT client_id,robot_code,open_conversation_id "
-                        "FROM notification_dingtalk_settings WHERE id=1"
+                        "SELECT webhook_encrypted,secret_encrypted,signing_enabled "
+                        "FROM notification_dingtalk_webhook_settings WHERE id=1"
                     ).fetchone() == {
-                        "client_id": "",
-                        "robot_code": "",
-                        "open_conversation_id": "",
+                        "webhook_encrypted": "",
+                        "secret_encrypted": "",
+                        "signing_enabled": False,
                     }
+                    assert (
+                        conn.execute(
+                            "SELECT to_regclass('notification_dingtalk_settings') AS name"
+                        ).fetchone()["name"]
+                        is None
+                    )
                 notifications.save(
                     dict(config, version=2, app_secret=""), "fixture_admin"
                 )
@@ -348,6 +636,38 @@ def main():
                 assert migrated["version"] == 5
                 balance.initialize()
                 assert notifications.snapshot()["version"] == 5
+                webhook = (
+                    "https://oapi.dingtalk.com/robot/send?access_token=fixture-token"
+                )
+                notifications.save(
+                    dict(
+                        version=5,
+                        enabled=True,
+                        channel="dingtalk_webhook",
+                        webhook_url=webhook,
+                        signing_enabled=True,
+                        signing_secret="fixture-signing-secret",
+                    ),
+                    "fixture_admin",
+                )
+                result = notifications.snapshot()
+                assert result["webhook_configured"]
+                assert result["signing_secret_configured"]
+                assert "webhook_encrypted" not in result
+                with connect() as conn:
+                    stored = conn.execute(
+                        "SELECT webhook_encrypted,secret_encrypted "
+                        "FROM notification_dingtalk_webhook_settings WHERE id=1"
+                    ).fetchone()
+                assert notifications.decrypt(stored["webhook_encrypted"]) == webhook
+                assert (
+                    notifications.decrypt(stored["secret_encrypted"])
+                    == "fixture-signing-secret"
+                )
+                with patch.object(dingtalk_webhook, "send") as ding_send:
+                    notifications.deliver(test=True, expected_version=6)
+                assert ding_send.call_args.args[0]["webhook_url"] == webhook
+                assert ding_send.call_args.args[1] == "fixture-signing-secret"
             print(
                 "PASS: encrypted credentials, secret retention, stale versions, test delivery, failures, recovery"
             )

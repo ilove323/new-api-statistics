@@ -75,33 +75,40 @@ def public(row):
         "enabled",
         "channel",
         "active_channel",
-        "app_id",
-        "robot_code",
-        "receive_id_type",
-        "receive_id",
         "last_attempt_at",
         "last_success_at",
         "last_error",
     )
-    return dict(
-        {k: row[k] for k in keys}, secret_configured=bool(row["secret_encrypted"])
-    )
+    result = {key: row[key] for key in keys}
+    if row["channel"] == "feishu_app":
+        result.update(
+            app_id=row["app_id"],
+            receive_id_type=row["receive_id_type"],
+            receive_id=row["receive_id"],
+            secret_configured=bool(row["secret_encrypted"]),
+        )
+    else:
+        result.update(
+            webhook_configured=bool(row["webhook_encrypted"]),
+            signing_enabled=row["signing_enabled"],
+            signing_secret_configured=bool(row["secret_encrypted"]),
+        )
+    return result
 
 
 def provider_config(conn, channel, lock=False):
-    """Map provider-specific storage to the dispatcher's common field names."""
+    """Read only the selected provider's isolated credential row."""
     suffix = " FOR UPDATE" if lock else ""
     if channel == "feishu_app":
         return conn.execute(
-            """SELECT app_id,secret_encrypted,'' AS robot_code,
-            receive_id_type,receive_id FROM notification_feishu_settings WHERE id=1"""
+            """SELECT app_id,secret_encrypted,receive_id_type,receive_id
+            FROM notification_feishu_settings WHERE id=1"""
             + suffix
         ).fetchone()
-    if channel == "dingtalk_app":
+    if channel == "dingtalk_webhook":
         return conn.execute(
-            """SELECT client_id AS app_id,secret_encrypted,robot_code,
-            'open_conversation_id' AS receive_id_type,
-            open_conversation_id AS receive_id FROM notification_dingtalk_settings WHERE id=1"""
+            """SELECT webhook_encrypted,secret_encrypted,signing_enabled
+            FROM notification_dingtalk_webhook_settings WHERE id=1"""
             + suffix
         ).fetchone()
     raise ValueError("不支持的报警渠道。")
@@ -137,12 +144,6 @@ def save(body, username):
     channel = body.get("channel")
     if channel not in CHANNELS:
         raise ValueError("不支持的报警渠道。")
-    fields = {}
-    for key in ("app_id", "robot_code", "receive_id_type", "receive_id", "app_secret"):
-        value = body.get(key, "")
-        if not isinstance(value, str) or len(value) > 512:
-            raise ValueError("报警渠道字段格式无效。")
-        fields[key] = value.strip()
     with balance.connect() as conn:
         row = conn.execute(
             "SELECT * FROM notification_settings WHERE id=1 FOR UPDATE"
@@ -150,25 +151,25 @@ def save(body, username):
         if row["version"] != body["version"]:
             raise balance.SettingsConflict()
         current = provider_config(conn, channel, lock=True)
-        supplied = fields.pop("app_secret")
-        # A changed application cannot accidentally reuse that provider's previous secret.
-        if fields["app_id"] != current["app_id"] and not supplied:
-            encrypted = ""
-        else:
-            encrypted = current["secret_encrypted"]
-        if supplied:
-            encrypted = cipher().encrypt(supplied.encode()).decode()
-        if body["enabled"]:
-            CHANNELS[channel].validate(fields, decrypt(encrypted))
-        elif (
-            fields["receive_id_type"]
-            not in {
-                "feishu_app": ("chat_id", "user_id"),
-                "dingtalk_app": ("open_conversation_id",),
-            }[channel]
-        ):
-            raise ValueError("接收目标类型无效。")
         if channel == "feishu_app":
+            fields = {}
+            for key in ("app_id", "receive_id_type", "receive_id", "app_secret"):
+                value = body.get(key, "")
+                if not isinstance(value, str) or len(value) > 512:
+                    raise ValueError("报警渠道字段格式无效。")
+                fields[key] = value.strip()
+            supplied = fields.pop("app_secret")
+            encrypted = (
+                ""
+                if fields["app_id"] != current["app_id"] and not supplied
+                else current["secret_encrypted"]
+            )
+            if supplied:
+                encrypted = cipher().encrypt(supplied.encode()).decode()
+            if body["enabled"]:
+                CHANNELS[channel].validate(fields, decrypt(encrypted))
+            elif fields["receive_id_type"] not in ("chat_id", "user_id"):
+                raise ValueError("接收目标类型无效。")
             conn.execute(
                 """UPDATE notification_feishu_settings SET app_id=%s,secret_encrypted=%s,
                 receive_id_type=%s,receive_id=%s WHERE id=1""",
@@ -180,15 +181,34 @@ def save(body, username):
                 ),
             )
         else:
+            webhook = body.get("webhook_url", "")
+            supplied = body.get("signing_secret", "")
+            signing_enabled = body.get("signing_enabled")
+            if (
+                not isinstance(webhook, str)
+                or len(webhook) > 2048
+                or not isinstance(supplied, str)
+                or len(supplied) > 512
+                or type(signing_enabled) is not bool
+            ):
+                raise ValueError("钉钉 Webhook 配置格式无效。")
+            webhook, supplied = webhook.strip(), supplied.strip()
+            webhook_encrypted = current["webhook_encrypted"]
+            secret_encrypted = current["secret_encrypted"]
+            if webhook:
+                webhook_encrypted = cipher().encrypt(webhook.encode()).decode()
+            if supplied:
+                secret_encrypted = cipher().encrypt(supplied.encode()).decode()
+            config = {
+                "webhook_url": decrypt(webhook_encrypted),
+                "signing_enabled": signing_enabled,
+            }
+            if body["enabled"]:
+                CHANNELS[channel].validate(config, decrypt(secret_encrypted))
             conn.execute(
-                """UPDATE notification_dingtalk_settings SET client_id=%s,secret_encrypted=%s,
-                robot_code=%s,open_conversation_id=%s WHERE id=1""",
-                (
-                    fields["app_id"],
-                    encrypted,
-                    fields["robot_code"],
-                    fields["receive_id"],
-                ),
+                """UPDATE notification_dingtalk_webhook_settings
+                SET webhook_encrypted=%s,secret_encrypted=%s,signing_enabled=%s WHERE id=1""",
+                (webhook_encrypted, secret_encrypted, signing_enabled),
             )
         conn.execute(
             """UPDATE notification_settings SET enabled=%s,channel=%s,version=version+1,
@@ -233,6 +253,8 @@ def deliver(test=False, expected_version=None):
             else:
                 text = format_alert_message(alert, load_site_name())
             channel = CHANNELS[config["channel"]]
+            if config["channel"] == "dingtalk_webhook":
+                config["webhook_url"] = decrypt(config["webhook_encrypted"])
             channel.send(config, decrypt(config["secret_encrypted"]), text)
         except ValueError as exc:
             error = str(exc)

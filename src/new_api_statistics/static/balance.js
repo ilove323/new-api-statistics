@@ -1,6 +1,7 @@
 /* Monitoring is site-wide and independent of report filters and Excel exports. */
 let balanceData=null,balanceVersion=null,balanceLoading=null,balanceLoadingLive=false;
 let channelVersion=null,channelDirty=false,channelBusy=false;
+let historyPreview=null;
 const balanceMoney=value=>value===null||value===undefined?'—':'¥ '+number(value,2);
 const balanceTime=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 async function balanceRequest(path,options={}){
@@ -10,6 +11,9 @@ async function balanceRequest(path,options={}){
   return data;
 }
 function balanceWrite(method,body){return {method,headers:{'Content-Type':'application/json','X-Statistics-Request':'1'},body:JSON.stringify(body)};}
+function balanceSettingsBody(){
+  return {enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion,excluded_channel_ids:[...document.querySelectorAll('#usage-channel-options input:not(:checked)')].map(input=>Number(input.value))};
+}
 function renderBalance(){
   const data=balanceData;
   $('balance-summary').replaceChildren();$('balance-months').replaceChildren();$('balance-alert-list').replaceChildren();
@@ -45,16 +49,40 @@ function refreshBalance(live=$('balance-alerts').open){
   })();
   return balanceLoading;
 }
+function setSettingsTab(tab){
+  document.querySelectorAll('[data-settings-tab]').forEach(button=>{
+    const active=button.dataset.settingsTab===tab;
+    button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;
+    $(`settings-panel-${button.dataset.settingsTab}`).hidden=!active;
+  });
+}
+document.querySelectorAll('[data-settings-tab]').forEach(button=>button.addEventListener('click',()=>setSettingsTab(button.dataset.settingsTab)));
+function renderUsageChannels(rows){
+  $('usage-channel-options').replaceChildren();
+  if(!rows.length){const empty=document.createElement('span');empty.className='usage-channel-empty';empty.textContent='暂无可选渠道';$('usage-channel-options').append(empty);return;}
+  for(const row of rows){
+    const label=document.createElement('label'),input=document.createElement('input'),name=document.createElement('span'),status=document.createElement('span');
+    input.type='checkbox';input.value=row.channel_id;input.checked=row.included;
+    name.className='usage-channel-name';name.textContent=`ID ${row.channel_id} · ${row.channel_name}`;
+    status.className='usage-channel-status '+(row.deleted?'deleted':Number(row.channel_status)===1?'enabled':'disabled');
+    status.textContent=row.deleted?'已删除':Number(row.channel_status)===1?'已启用':'已禁用';
+    label.append(input,name,status);$('usage-channel-options').append(label);
+  }
+}
+async function loadUsageChannels(){
+  const data=await balanceRequest('/usage-channels');renderUsageChannels(data.rows||[]);
+}
 $('balance-gear').addEventListener('click',async()=>{
+  setSettingsTab('balance');
   $('balance-settings').showModal();$('balance-save').disabled=true;$('balance-settings-status').textContent='正在读取设置…';
-  channelVersion=null;channelDirty=false;$('channel-secret').value='';channelButtons();
+  channelVersion=null;channelDirty=false;$('channel-secret').value='';$('channel-webhook-url').value='';$('channel-signing-secret').value='';channelButtons();
   $('channel-status').textContent='正在读取渠道配置…';
   try{
     const data=await refreshBalance();
     if(!data?.configured){$('balance-settings-status').textContent='余额监控数据库尚未配置，请稍后重试。';return;}
     const s=data.settings;balanceVersion=s.version;
     $('balance-enabled').checked=s.enabled;$('balance-budget').value=s.budget;$('balance-threshold').value=s.threshold;$('balance-start').value=s.start_month.slice(0,7);
-    $('balance-settings-status').textContent='';$('balance-save').disabled=false;
+    await loadUsageChannels();$('balance-settings-status').textContent='';$('balance-save').disabled=false;
     await loadChannel();
   }catch(e){$('balance-settings-status').textContent=e.message;}
 });
@@ -72,26 +100,62 @@ $('balance-form').addEventListener('submit',async event=>{
   event.preventDefault();$('balance-save').disabled=true;
   $('balance-settings-status').textContent='正在保存设置并归档历史月份…';
   try{
-    await balanceRequest('/settings',balanceWrite('PUT',{enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion}));
+    await balanceRequest('/settings',balanceWrite('PUT',balanceSettingsBody()));
     $('balance-settings').close();$('balance-alerts').showModal();await refreshBalance();
   }catch(e){$('balance-settings-status').textContent=e.message;}
   finally{$('balance-save').disabled=false;}
 });
+$('balance-recalculate').addEventListener('click',async()=>{
+  const warnings=[
+    '追溯会重新读取累计起始月份至上月的完整渠道消费，并覆盖已有月度渠道归档。是否继续？',
+    '渠道启用状态和当前勾选不影响原始归档；如果查询失败或整个区间没有数据，系统会报错并保留旧归档。再次确认？',
+    '最后确认：确定读取并对比全部历史计费吗？',
+  ];
+  if(warnings.some(message=>!window.confirm(message)))return;
+  $('balance-recalculate').disabled=true;$('balance-save').disabled=true;
+  $('balance-settings-status').textContent='正在读取完整历史渠道计费，请勿关闭页面…';
+  try{
+    const settings=balanceSettingsBody();
+    const result=await balanceRequest('/recalculate-history/preview',balanceWrite('POST',settings));
+    historyPreview={settings,rows:result.rows};
+    $('balance-history-preview-rows').replaceChildren();
+    for(const row of result.rows){
+      const tr=document.createElement('tr');
+      cell(tr,row.month);cell(tr,balanceMoney(row.before));cell(tr,balanceMoney(row.after));cell(tr,balanceMoney(Number(row.after)-Number(row.before)));
+      $('balance-history-preview-rows').append(tr);
+    }
+    $('balance-history-preview-status').textContent='';
+    $('balance-settings-status').textContent='预览已生成，确认逐月对比后才会覆盖渠道归档。';
+    $('balance-history-preview').showModal();
+  }catch(e){$('balance-settings-status').textContent=e.message;}
+  finally{$('balance-recalculate').disabled=false;$('balance-save').disabled=false;}
+});
+$('balance-history-apply').addEventListener('click',async()=>{
+  if(!historyPreview)return;
+  $('balance-history-apply').disabled=true;
+  $('balance-history-preview-status').textContent='正在再次核对并写入完整渠道归档…';
+  try{
+    const result=await balanceRequest('/recalculate-history',balanceWrite('POST',{settings:historyPreview.settings,preview:historyPreview.rows}));
+    balanceVersion=result.version;historyPreview=null;
+    $('balance-history-preview').close();$('balance-settings').close();$('balance-alerts').showModal();
+    await refreshBalance(true);
+  }catch(e){$('balance-history-preview-status').textContent=e.message;}
+  finally{$('balance-history-apply').disabled=false;}
+});
+$('balance-history-preview').addEventListener('close',()=>{historyPreview=null;$('balance-history-preview-status').textContent='';});
+$('usage-channels-all').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=true));
+$('usage-channels-none').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=false));
 function channelButtons(){
-  for(const id of ['channel-enabled','channel-type','channel-app-id','channel-secret','channel-robot-code','channel-receive-type','channel-receive-id']){
+  for(const id of ['channel-enabled','channel-type','channel-app-id','channel-secret','channel-receive-type','channel-receive-id','channel-webhook-url','channel-signing-enabled','channel-signing-secret']){
     $(id).disabled=channelBusy||channelVersion===null;
   }
   $('channel-save').disabled=channelBusy||channelVersion===null;
   $('channel-test').disabled=channelBusy||channelVersion===null||channelDirty;
 }
 function channelFields(channel,receiveType){
-  const dingtalk=channel==='dingtalk_app';
-  $('channel-app-id-label').textContent=dingtalk?'Client ID':'App ID';
-  $('channel-secret-label').textContent=dingtalk?'Client Secret':'App Secret';
-  $('channel-robot-code-field').hidden=!dingtalk;
-  $('channel-receive-id-label').textContent=dingtalk?'openConversationId':'接收目标 ID';
-  const options=dingtalk?[['open_conversation_id','群聊（openConversationId）']]:
-    [['chat_id','群聊（chat_id）'],['user_id','个人（user_id）']];
+  const dingtalk=channel==='dingtalk_webhook';
+  $('channel-feishu-fields').hidden=dingtalk;$('channel-dingtalk-fields').hidden=!dingtalk;
+  const options=[['chat_id','群聊（chat_id）'],['user_id','个人（user_id）']];
   $('channel-receive-type').replaceChildren(...options.map(([value,label])=>new Option(label,value)));
   if(options.some(([value])=>value===receiveType))$('channel-receive-type').value=receiveType;
 }
@@ -99,10 +163,13 @@ function renderChannel(data){
   channelVersion=data.version;channelDirty=data.channel!==data.active_channel;
   $('channel-enabled').checked=data.enabled;$('channel-type').value=data.channel;
   channelFields(data.channel,data.receive_id_type);
-  $('channel-app-id').value=data.app_id;$('channel-secret').value='';
-  $('channel-robot-code').value=data.robot_code||'';
+  $('channel-app-id').value=data.app_id||'';$('channel-secret').value='';
   $('channel-secret').placeholder=data.secret_configured?'已保存；留空保持不变':'未配置';
-  $('channel-receive-type').value=data.receive_id_type;$('channel-receive-id').value=data.receive_id;
+  $('channel-receive-type').value=data.receive_id_type||'chat_id';$('channel-receive-id').value=data.receive_id||'';
+  $('channel-webhook-url').value='';$('channel-webhook-url').placeholder=data.webhook_configured?'已保存；留空保持不变':'未配置';
+  $('channel-signing-enabled').checked=Boolean(data.signing_enabled);$('channel-signing-secret').value='';
+  $('channel-signing-secret').placeholder=data.signing_secret_configured?'已保存；留空保持不变':'未配置';
+  $('channel-signing-secret-field').hidden=!$('channel-signing-enabled').checked;
   $('channel-status').textContent=data.last_error?`最近发送失败：${data.last_error}`:
     data.last_success_at?`最近发送成功：${balanceTime(data.last_success_at)}`:'';
   channelButtons();
@@ -117,17 +184,19 @@ $('channel-type').addEventListener('change',async()=>{
   channelBusy=false;channelButtons();
 });
 $('channel-form').addEventListener('input',()=>{channelDirty=true;channelButtons();});
+$('channel-signing-enabled').addEventListener('change',()=>{$('channel-signing-secret-field').hidden=!$('channel-signing-enabled').checked;});
 $('channel-form').addEventListener('submit',async event=>{
   event.preventDefault();if(channelBusy)return;
   channelBusy=true;channelButtons();$('channel-status').textContent='正在保存渠道…';
-  const fields=['channel-enabled','channel-type','channel-app-id','channel-secret','channel-robot-code','channel-receive-type','channel-receive-id'];
+  const fields=['channel-enabled','channel-type','channel-app-id','channel-secret','channel-receive-type','channel-receive-id','channel-webhook-url','channel-signing-enabled','channel-signing-secret'];
   fields.forEach(id=>$(id).disabled=true);
   try{
-    const data=await balanceRequest('/channel',balanceWrite('PUT',{
-      version:channelVersion,enabled:$('channel-enabled').checked,channel:$('channel-type').value,
-      app_id:$('channel-app-id').value,app_secret:$('channel-secret').value,
-      robot_code:$('channel-robot-code').value,
-      receive_id_type:$('channel-receive-type').value,receive_id:$('channel-receive-id').value}));
+    const body={version:channelVersion,enabled:$('channel-enabled').checked,channel:$('channel-type').value};
+    if(body.channel==='dingtalk_webhook')Object.assign(body,{webhook_url:$('channel-webhook-url').value,
+      signing_enabled:$('channel-signing-enabled').checked,signing_secret:$('channel-signing-secret').value});
+    else Object.assign(body,{app_id:$('channel-app-id').value,app_secret:$('channel-secret').value,
+      receive_id_type:$('channel-receive-type').value,receive_id:$('channel-receive-id').value});
+    const data=await balanceRequest('/channel',balanceWrite('PUT',body));
     renderChannel(data);$('channel-status').textContent='渠道已保存。';
   }catch(e){$('channel-status').textContent=e.message;}
   finally{channelBusy=false;fields.forEach(id=>$(id).disabled=false);channelButtons();}

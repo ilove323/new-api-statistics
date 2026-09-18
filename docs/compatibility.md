@@ -8,9 +8,10 @@ CI 配置覆盖 PostgreSQL 15/16，其他版本需自行验证。尚无按 New A
 
 | 表 | 字段 |
 | --- | --- |
-| logs | id, created_at, user_id, username, model_name, quota, prompt_tokens, completion_tokens, other, type |
+| logs | id, created_at, user_id, username, model_name, quota, prompt_tokens, completion_tokens, other, type, channel_id, channel_name |
 | users | id, username, display_name, password, role, status, deleted_at |
 | options | key, value |
+| channels | id, name, status |
 
 消费日志为 type=2，quota / 500000 为消费金额。认证要求 bcrypt 密码、
 role >= 10、status=1 且 deleted_at 为空。价格来自 options 中模型倍率配置。

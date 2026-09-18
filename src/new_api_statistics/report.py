@@ -24,13 +24,14 @@ TOKEN_FIELDS = [
 HEADERS = [
     "用户名",
     "显示名",
+    "消费请求数",
     "模型",
     "总Token",
     "输入Token",
     "输出Token",
     "缓存读取Token",
     "缓存写入Token",
-    "最后倍率",
+    "倍率",
     "输入价格（元/M）",
     "输出价格（元/M）",
     "缓存读价格（元/M）",
@@ -40,6 +41,7 @@ HEADERS = [
 FIELDS = [
     "username",
     "display_name",
+    "request_count",
     "model_name",
     "total_tokens",
     *TOKEN_FIELDS,
@@ -49,12 +51,7 @@ FIELDS = [
     "cache_price",
     "write_price",
     "amount",
-    "request_count",
 ]
-HEADERS.append("消费请求数")
-request_column = FIELDS.index("request_count")
-FIELDS.insert(1, FIELDS.pop(request_column))
-HEADERS.insert(1, HEADERS.pop(request_column))
 
 
 def convert_tokens(row):
@@ -222,8 +219,8 @@ def load_site_name():
     return (row[0] or "").strip() if row and (row[0] or "").strip() else "New API"
 
 
-def load_report(start, end):
-    """Connection settings come from PG* environment variables (libpq)."""
+def load_report(start, end, *, by_token=False, token_ids=None, groups=None):
+    """Load either user-model totals or user-token-model totals read-only."""
     first, last = period(start, end)
     with psycopg.connect(
         connect_timeout=8,
@@ -231,7 +228,16 @@ def load_report(start, end):
         options="-c default_transaction_read_only=on -c statement_timeout=60000",
     ) as conn:
         conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
-        rows = conn.execute(SQL, {"start": first, "end": last}).fetchall()
+        rows = conn.execute(
+            SQL,
+            {
+                "start": first,
+                "end": last,
+                "by_token": by_token,
+                "token_ids": token_ids,
+                "groups": groups,
+            },
+        ).fetchall()
         user_ids = list({row["user_id"] for row in rows})
         names = {}
         if user_ids:
@@ -256,6 +262,41 @@ def load_report(start, end):
         ).fetchall()
     options = {r["key"]: json.loads(r["value"] or "{}") for r in records}
     return decorate(rows, options)
+
+
+def load_token_options(start, end):
+    """Return the latest name of each token used in the selected interval."""
+    first, last = period(start, end)
+    with psycopg.connect(
+        connect_timeout=8,
+        row_factory=dict_row,
+        options="-c default_transaction_read_only=on -c statement_timeout=60000",
+    ) as conn:
+        return conn.execute(
+            """SELECT DISTINCT ON (token_id) token_id,
+                      COALESCE(NULLIF(btrim(token_name), ''), '未知令牌') AS token_name
+               FROM logs
+               WHERE type=2 AND created_at >= %s AND created_at < %s
+               ORDER BY token_id, created_at DESC, id DESC""",
+            (first, last),
+        ).fetchall()
+
+
+def load_group_options(start, end):
+    """Return groups used in the selected interval."""
+    first, last = period(start, end)
+    with psycopg.connect(
+        connect_timeout=8,
+        row_factory=dict_row,
+        options="-c default_transaction_read_only=on -c statement_timeout=60000",
+    ) as conn:
+        return conn.execute(
+            """SELECT DISTINCT COALESCE("group", '') AS group_name
+               FROM logs
+               WHERE type=2 AND created_at >= %s AND created_at < %s
+               ORDER BY group_name""",
+            (first, last),
+        ).fetchall()
 
 
 def totals(rows, start=None, end=None):
@@ -335,11 +376,11 @@ def export_excel(rows, start, end):
         values = [r.get(f) for f in FIELDS]
         ws.append(values)
         # Treat database names literally, including strings starting with '='.
-        for col in (1, 3, 4):
+        for col in (1, 2, 4):
             ws.cell(ws.max_row, col).data_type = "s"
     last = ws.max_row
     ws.append(["总计"])
-    for col in (2, 5, 6, 7, 8, 9, 15):
+    for col in (3, 5, 6, 7, 8, 9, 15):
         letter = get_column_letter(col)
         ws.cell(last + 1, col, f"=SUM({letter}3:{letter}{last})" if rows else 0)
     begin = 3
@@ -353,21 +394,21 @@ def export_excel(rows, start, end):
                     start_row=begin, end_row=i + 2, start_column=1, end_column=1
                 )
                 ws.merge_cells(
-                    start_row=begin, end_row=i + 2, start_column=3, end_column=3
+                    start_row=begin, end_row=i + 2, start_column=2, end_column=2
                 )
             begin = i + 3
     for cells in ws.iter_rows(min_row=3):
         for c in cells:
             c.alignment = Alignment(vertical="center")
-            if c.column not in (1, 3, 4):
+            if c.column not in (1, 2, 4):
                 c.number_format = (
-                    "#,##0" if c.column in (2, 5, 6, 7, 8, 9) else "#,##0.######"
+                    "#,##0" if c.column in (3, 5, 6, 7, 8, 9) else "#,##0.######"
                 )
     for c in ws[2]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="156B59")
     for i, width in enumerate(
-        [24, 18, 24, 36, 30, 22, 22, 30, 22, 12, 24, 24, 24, 24, 22], 1
+        [24, 24, 18, 36, 30, 22, 22, 30, 22, 12, 24, 24, 24, 24, 22], 1
     ):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "E3"
@@ -448,7 +489,7 @@ def export_excel(rows, start, end):
         ("输出Token", "G"),
         ("缓存读取Token", "H"),
         ("缓存写入Token", "I"),
-        ("消费请求数", "B"),
+        ("消费请求数", "C"),
     ]:
         summary.append([title, f"='用户模型用量'!{col}{last + 1}"])
     first_second, last_second = period(start, end)

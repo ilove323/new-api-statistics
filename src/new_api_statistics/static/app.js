@@ -1,10 +1,18 @@
-/* Fetch one database aggregate and filter the snapshot locally by user and model. */
+/* Fetch one database aggregate; user and model filters only affect the detail table. */
 const $ = id => document.getElementById(id);
 let snapshot = null;
+let tokenSnapshot = null;
+let tokenOptions = [];
+let groupOptions = [];
+let filteredSelectionSnapshot = null;
+let detailMode = 'summary';
+let modelMode = 'model';
 let ranking = 'model_amount';
 const tokenFields = ['total_tokens','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'];
 const detailColumns = ['username','request_count','model_name',...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount'];
+const modelSummaryColumns = ['group_ratio','input_price','output_price','cache_price','write_price'];
 const columnStorageKey = 'new-api-statistics.visible-columns';
+let modelColumnSelection = null;
 const number = (n, digits=6) => n === null || n === undefined ? '—' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:digits});
 const cell = (tr, value, cls='', column='') => {const td=document.createElement('td');td.textContent=value;td.className=cls;if(column)td.dataset.column=column;tr.append(td);return td;};
 const userCell = (tr,row) => {
@@ -12,22 +20,45 @@ const userCell = (tr,row) => {
   if(row.display_name){const name=document.createElement('span');name.className='display-name';name.textContent=row.display_name;td.append(name);}
   return td;
 };
+function aggregateModels(data){
+  const grouped=new Map(),priceFields=['group_ratio','input_price','output_price','cache_price','write_price'];
+  for(const row of data){
+    const key=[row.user_id,row.username,detailMode==='token'?row.token_id:''].join('\u0000');
+    if(!grouped.has(key)){
+      grouped.set(key,{...row,model_name:'',amount:0,request_count:0,...Object.fromEntries(tokenFields.map(field=>[field,0])),...Object.fromEntries(priceFields.map(field=>[field,null])),_sourceRows:[]});
+    }
+    const total=grouped.get(key);
+    total.amount+=Number(row.amount);total.request_count+=Number(row.request_count);
+    tokenFields.forEach(field=>total[field]+=Number(row[field]));
+    total._sourceRows.push(row);
+  }
+  return [...grouped.values()];
+}
 function selectedRows(){
   if(!snapshot)return [];
-  return snapshot.rows.filter(r=>(!$('user').value||r.username===$('user').value)&&(!$('model').value||r.model_name===$('model').value));
+  const users=selectedFilterValues('user'),models=selectedFilterValues('model');
+  const selected=selectedFilterValues('token').size||selectedFilterValues('group').size;
+  const rows=selected?(filteredSelectionSnapshot?.rows||[]):detailMode==='token'?(tokenSnapshot?.rows||[]):snapshot.rows;
+  const filtered=rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
+  return modelMode==='summary'?aggregateModels(filtered):filtered;
 }
 function visibleColumns(){
   return new Set([...document.querySelectorAll('[data-column-toggle]:checked')].map(input=>input.dataset.columnToggle));
 }
 function saveVisibleColumns(){
-  try{localStorage.setItem(columnStorageKey,JSON.stringify([...visibleColumns()]));}catch{}
+  const visible=visibleColumns();
+  if(modelMode==='summary'&&modelColumnSelection)modelColumnSelection.forEach(column=>visible.add(column));
+  try{localStorage.setItem(columnStorageKey,JSON.stringify([...visible]));}catch{}
 }
 function applyColumnVisibility(){
   const visible=visibleColumns();
+  const hiddenByMode=new Set(modelMode==='summary'?['model_name',...modelSummaryColumns]:[]);
   document.querySelectorAll('#usage-table [data-column]').forEach(element=>{
-    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column);
+    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column)||hiddenByMode.has(element.dataset.column);
   });
-  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,(visible.size+(developerMode?2:0))*115)+'px');
+  document.querySelectorAll('#usage-table [data-token-column]').forEach(element=>element.hidden=detailMode!=='token');
+  const columns=[...visible].filter(column=>!hiddenByMode.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);
+  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,columns*115)+'px');
 }
 function loadVisibleColumns(){
   let saved;
@@ -35,11 +66,56 @@ function loadVisibleColumns(){
   if(!Array.isArray(saved)||!saved.length)return;
   document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=saved.includes(input.dataset.columnToggle));
 }
-function populateFilter(id,placeholder,values,label){
-  const select=$(id),selected=select.value;
-  select.replaceChildren(new Option(placeholder,''));
-  values.forEach(value=>select.add(new Option(label(value),value)));
-  select.value=values.includes(selected)?selected:'';
+function selectedFilterValues(id){
+  return new Set([...document.querySelectorAll(`#${id}-options input:checked`)].map(input=>input.value));
+}
+function updateFilterSummary(id,placeholder){
+  const selected=[...document.querySelectorAll(`#${id}-options input:checked`)];
+  const summary=$(`${id}-summary`);
+  summary.textContent=!selected.length?placeholder:selected.length===1?selected[0].dataset.label:`已选 ${selected.length} 项`;
+  summary.title=selected.map(input=>input.dataset.label).join('、');
+}
+function populateFilter(id,placeholder,values,label,change=()=>{if(snapshot)renderDetails();}){
+  const options=$(`${id}-options`),selected=selectedFilterValues(id);
+  options.replaceChildren();
+  const search=document.createElement('input');
+  search.type='search';search.className='filter-search';search.placeholder='输入关键字筛选';search.autocomplete='off';search.setAttribute('aria-label',`筛选${placeholder.replace('全部','')}`);
+  options.append(search);
+  values.forEach(value=>{
+    const text=label(value),row=document.createElement('label'),input=document.createElement('input');
+    input.type='checkbox';input.value=value;input.dataset.label=text;input.checked=selected.has(value);
+    input.addEventListener('change',()=>{updateFilterSummary(id,placeholder);change();});
+    row.append(input,document.createTextNode(text));options.append(row);
+  });
+  const empty=document.createElement('p');empty.className='filter-empty';empty.textContent='无匹配选项';empty.hidden=true;options.append(empty);
+  const all=document.createElement('button');all.type='button';all.textContent='全部';
+  all.addEventListener('click',()=>{
+    options.querySelectorAll('input:checked').forEach(input=>input.checked=false);
+    updateFilterSummary(id,placeholder);change();
+  });
+  options.append(all);
+  search.addEventListener('input',()=>{
+    const keyword=search.value.trim().toLocaleLowerCase('zh-CN');let matches=0;
+    options.querySelectorAll('label').forEach(row=>{
+      const matched=!keyword||row.textContent.toLocaleLowerCase('zh-CN').includes(keyword);
+      row.hidden=!matched;
+      row.style.display=matched?'':'none';
+      if(matched)matches++;
+    });
+    empty.hidden=matches!==0;
+    empty.style.display=matches?'none':'';
+  });
+  updateFilterSummary(id,placeholder);
+}
+const tokenFilterValue = row => String(row.token_id);
+function populateTokenFilter(){
+  const counts=new Map();
+  tokenOptions.forEach(row=>counts.set(row.token_name,(counts.get(row.token_name)||0)+1));
+  const labels=new Map(tokenOptions.map(row=>[String(row.token_id),counts.get(row.token_name)>1?`${row.token_name}（ID ${row.token_id}）`:row.token_name]));
+  populateFilter('token','全部令牌',[...labels.keys()].sort((a,b)=>labels.get(a).localeCompare(labels.get(b))),value=>labels.get(value),refreshSelection);
+}
+function populateGroupFilter(){
+  populateFilter('group','全部分组',groupOptions.map(row=>row.group_name),value=>value||'未分组',refreshSelection);
 }
 // Browser-only diagnostics: never add fields to the API snapshot or Excel export.
 const developerMode = new URLSearchParams(window.location.search).get('dev') === '1';
@@ -56,17 +132,24 @@ function developerCells(tr,row){
   const tokens=Number(row.total_tokens);
   cell(tr,tokens>0?number(Number(row.amount)/tokens*1000000,6):'—','','amount_per_million');
 }
-function render() {
-  hideMoneyTooltip();
-  const data=selectedRows();
+function sumRows(data) {
   const total={amount:0,request_count:0,...Object.fromEntries(tokenFields.map(k=>[k,0]))};
   data.forEach(r=>{total.amount+=Number(r.amount);total.request_count+=Number(r.request_count);tokenFields.forEach(k=>total[k]+=Number(r[k]));});
+  return total;
+}
+function renderSummary(data) {
+  const total=sumRows(data);
   $('amount').textContent='¥ '+number(total.amount,2);
   tokenFields.forEach(k=>$(k).textContent=number(total[k],0));
   const seconds=Number(snapshot.totals.duration_seconds);
   $('tpm').textContent=number(total.total_tokens*60/seconds,2);
   $('rpm').textContent=number(total.request_count*60/seconds,4);
   $('counts').textContent=`${new Set(data.map(r=>r.user_id)).size} / ${new Set(data.map(r=>r.model_name)).size}`;
+}
+function renderDetails() {
+  hideMoneyTooltip();
+  const data=selectedRows();
+  const total=sumRows(data);
   $('rows').replaceChildren();$('totals').replaceChildren();
   for(let i=0;i<data.length;i++) {
     const r=data[i],tr=document.createElement('tr');
@@ -74,24 +157,118 @@ function render() {
       let end=i+1;while(end<data.length && data[end].user_id===r.user_id && data[end].username===r.username)end++;
       userCell(tr,r).rowSpan=end-i;
     }
+    if(detailMode==='token')cell(tr,r.token_name||'未知令牌','token-name');
     cell(tr,number(r.request_count,0),'','request_count');cell(tr,r.model_name,'model','model_name');
     for(const key of [...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount']){
       const td=cell(tr,number(r[key],tokenFields.includes(key)?0:6),'',key);
-      if(key==='amount')bindMoneyTooltip(td,()=>rowMoneyFormula(r));
+      if(key==='amount')bindMoneyTooltip(td,()=>modelMode==='summary'?totalMoneyFormula(r._sourceRows,r.amount):rowMoneyFormula(r));
     }
     developerCells(tr,r);
     $('rows').append(tr);
   }
-  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size+(developerMode?2:0);$('rows').append(tr);}
-  const tr=document.createElement('tr');cell(tr,'总计','','username');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
+  if(!data.length){const hidden=modelMode==='summary'?new Set(['model_name',...modelSummaryColumns]):new Set(),tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=[...visibleColumns()].filter(column=>!hidden.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
+  const tr=document.createElement('tr');cell(tr,'总计','','username');if(detailMode==='token')cell(tr,'','token-name');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
   for(const key of ['group_ratio','input_price','output_price','cache_price','write_price'])cell(tr,'','',key);
   bindMoneyTooltip(cell(tr,number(total.amount),'','amount'),()=>totalMoneyFormula(data,total.amount));
   developerCells(tr,total);
   $('totals').append(tr);
   applyColumnVisibility();
+}
+function setDetailMode(mode){
+  detailMode=mode;
+  document.querySelectorAll('[data-detail-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.detailMode===mode)));
+}
+function setModelMode(mode){
+  const toggles=[...document.querySelectorAll('[data-column-toggle]')].filter(input=>modelSummaryColumns.includes(input.dataset.columnToggle));
+  if(mode==='summary'&&modelMode!=='summary'){
+    modelColumnSelection=new Set(toggles.filter(input=>input.checked).map(input=>input.dataset.columnToggle));
+    toggles.forEach(input=>{input.checked=false;input.disabled=true;});
+  }else if(mode==='model'&&modelMode==='summary'){
+    toggles.forEach(input=>{input.disabled=false;input.checked=modelColumnSelection?.has(input.dataset.columnToggle)??false;});
+    modelColumnSelection=null;
+  }
+  modelMode=mode;
+  document.querySelectorAll('[data-model-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.modelMode===mode)));
+}
+function updateReportStatus(){
+  const rows=selectedRows();
+  const label=modelMode==='summary'?(detailMode==='token'?'用户令牌汇总':'用户汇总'):(detailMode==='token'?'用户令牌模型汇总':'用户模型汇总');
+  $('status').className='';
+  $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${rows.length} 条${label}`;
+  if(modelMode==='model'&&snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
+}
+async function loadTokenDetails(){
+  if(tokenSnapshot||!snapshot)return;
+  const expected=`${snapshot.start}\n${snapshot.end}`;
+  const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/by-token?'+params);
+  if(!response.ok){let msg='分令牌查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenSnapshot=result;
+}
+async function loadTokenOptions(){
+  const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/tokens?'+params);
+  if(!response.ok){let msg='令牌列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenOptions=result.rows;
+}
+async function loadGroupOptions(){
+  const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  const response=await fetch('/statistics/api/usage/groups?'+params);
+  if(!response.ok){let msg='分组列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)groupOptions=result.rows;
+}
+async function loadFilteredSelection(){
+  const tokenIds=[...selectedFilterValues('token')].sort(),groups=[...selectedFilterValues('group')].sort();
+  if(!tokenIds.length&&!groups.length){filteredSelectionSnapshot=null;return;}
+  const expected=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${tokenIds.join(',')}\n${groups.join(',')}`;
+  const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
+  tokenIds.forEach(id=>params.append('token_id',id));
+  groups.forEach(group=>params.append('group',group));
+  if(detailMode==='token')params.set('by_token','1');
+  const response=await fetch('/statistics/api/usage/by-selection?'+params);
+  if(!response.ok){let msg='筛选查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
+  const result=await response.json();
+  const current=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${[...selectedFilterValues('token')].sort().join(',')}\n${[...selectedFilterValues('group')].sort().join(',')}`;
+  if(expected===current)filteredSelectionSnapshot=result;
+}
+async function refreshSelection(){
+  filteredSelectionSnapshot=null;
+  if(!snapshot)return;
+  $('status').className='';$('status').textContent='正在应用筛选…';
+  try{await loadFilteredSelection();renderDetails();updateReportStatus();}
+  catch(error){$('status').className='error';$('status').textContent=error.message;}
+}
+document.querySelectorAll('[data-detail-mode]').forEach(button=>button.addEventListener('click',async()=>{
+  const mode=button.dataset.detailMode;
+  if(mode===detailMode)return;
+  setDetailMode(mode);
+  filteredSelectionSnapshot=null;
+  document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=true);
+  $('status').className='';$('status').textContent='正在切换明细…';
+  try{
+    if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
+    else if(mode==='token')await loadTokenDetails();
+    renderDetails();updateReportStatus();
+  }
+  catch(error){setDetailMode('summary');renderDetails();$('status').className='error';$('status').textContent=error.message;}
+  finally{document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=false);}
+}));
+document.querySelectorAll('[data-model-mode]').forEach(button=>button.addEventListener('click',()=>{
+  const mode=button.dataset.modelMode;
+  if(mode===modelMode)return;
+  setModelMode(mode);
+  if(snapshot){renderDetails();updateReportStatus();}
+  else applyColumnVisibility();
+}));
+function render() {
+  const data=snapshot.rows;
+  renderSummary(data);
+  renderDetails();
   renderRanking(data);
-  $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${data.length} 条用户模型汇总`;
-  if(data.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
+  updateReportStatus();
 }
 function renderRanking(data) {
   const models=new Map();data.forEach(r=>models.set(r.model_name,(models.get(r.model_name)||0)+Number(r.amount)));
@@ -139,11 +316,14 @@ async function query(event){
   try{
     const response=await fetch('/statistics/api/usage?'+params);
     if(!response.ok){let msg='查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-    snapshot=await response.json();
+    snapshot=await response.json();tokenSnapshot=null;filteredSelectionSnapshot=null;tokenOptions=[];groupOptions=[];
     const userNames=[...new Set(snapshot.rows.map(r=>r.username))].sort();
     const displayNames=new Map(snapshot.rows.map(r=>[r.username,r.display_name]));
     populateFilter('user','全部用户',userNames,name=>displayNames.get(name)?`${name}（${displayNames.get(name)}）`:name);
     populateFilter('model','全部模型',[...new Set(snapshot.rows.map(r=>r.model_name))].sort(),name=>name);
+    await Promise.all([loadTokenOptions(),loadGroupOptions()]);populateTokenFilter();populateGroupFilter();
+    if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
+    else if(detailMode==='token')await loadTokenDetails();
     $('updated').textContent='更新于 '+snapshot.updated_at.replace('T',' ').slice(0,19)+' 北京时间';render();$('export').disabled=false;
   }catch(error){$('status').className='error';$('status').textContent=error.message;}
   finally{$('submit').disabled=false;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=false);}
@@ -155,12 +335,11 @@ document.querySelectorAll('[data-preset]').forEach(button=>button.addEventListen
 }));
 for(const id of ['start','end'])$(id).addEventListener('input',()=>document.querySelectorAll('[data-preset]').forEach(b=>b.setAttribute('aria-pressed','false')));
 $('query').addEventListener('submit',query);
-for(const id of ['user','model'])$(id).addEventListener('change',()=>snapshot&&render());
 document.querySelectorAll('[data-column-toggle]').forEach(input=>input.addEventListener('change',()=>{
   if(!document.querySelector('[data-column-toggle]:checked'))input.checked=true;
   saveVisibleColumns();applyColumnVisibility();
 }));
-$('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
-$('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end,user:$('user').value,model:$('model').value}));});
+$('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]:not(:disabled)').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
+$('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end}));});
 loadVisibleColumns();applyColumnVisibility();
 query();
