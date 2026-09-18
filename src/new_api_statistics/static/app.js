@@ -6,6 +6,7 @@ let tokenOptions = [];
 let groupOptions = [];
 let filteredSelectionSnapshot = null;
 let detailMode = 'summary';
+let modelMode = 'model';
 let ranking = 'model_amount';
 const tokenFields = ['total_tokens','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'];
 const detailColumns = ['username','request_count','model_name',...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount'];
@@ -17,12 +18,27 @@ const userCell = (tr,row) => {
   if(row.display_name){const name=document.createElement('span');name.className='display-name';name.textContent=row.display_name;td.append(name);}
   return td;
 };
+function aggregateModels(data){
+  const grouped=new Map(),priceFields=['group_ratio','input_price','output_price','cache_price','write_price'];
+  for(const row of data){
+    const key=[row.user_id,row.username,detailMode==='token'?row.token_id:''].join('\u0000');
+    if(!grouped.has(key)){
+      grouped.set(key,{...row,model_name:'',amount:0,request_count:0,...Object.fromEntries(tokenFields.map(field=>[field,0])),...Object.fromEntries(priceFields.map(field=>[field,null])),_sourceRows:[]});
+    }
+    const total=grouped.get(key);
+    total.amount+=Number(row.amount);total.request_count+=Number(row.request_count);
+    tokenFields.forEach(field=>total[field]+=Number(row[field]));
+    total._sourceRows.push(row);
+  }
+  return [...grouped.values()];
+}
 function selectedRows(){
   if(!snapshot)return [];
   const users=selectedFilterValues('user'),models=selectedFilterValues('model');
   const selected=selectedFilterValues('token').size||selectedFilterValues('group').size;
   const rows=selected?(filteredSelectionSnapshot?.rows||[]):detailMode==='token'?(tokenSnapshot?.rows||[]):snapshot.rows;
-  return rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
+  const filtered=rows.filter(r=>(!users.size||users.has(r.username))&&(!models.size||models.has(r.model_name)));
+  return modelMode==='summary'?aggregateModels(filtered):filtered;
 }
 function visibleColumns(){
   return new Set([...document.querySelectorAll('[data-column-toggle]:checked')].map(input=>input.dataset.columnToggle));
@@ -33,10 +49,11 @@ function saveVisibleColumns(){
 function applyColumnVisibility(){
   const visible=visibleColumns();
   document.querySelectorAll('#usage-table [data-column]').forEach(element=>{
-    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column);
+    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column)||(element.dataset.column==='model_name'&&modelMode==='summary');
   });
   document.querySelectorAll('#usage-table [data-token-column]').forEach(element=>element.hidden=detailMode!=='token');
-  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,(visible.size+(detailMode==='token'?1:0)+(developerMode?2:0))*115)+'px');
+  const columns=visible.size-(modelMode==='summary'&&visible.has('model_name')?1:0)+(detailMode==='token'?1:0)+(developerMode?2:0);
+  $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,columns*115)+'px');
 }
 function loadVisibleColumns(){
   let saved;
@@ -139,12 +156,12 @@ function renderDetails() {
     cell(tr,number(r.request_count,0),'','request_count');cell(tr,r.model_name,'model','model_name');
     for(const key of [...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount']){
       const td=cell(tr,number(r[key],tokenFields.includes(key)?0:6),'',key);
-      if(key==='amount')bindMoneyTooltip(td,()=>rowMoneyFormula(r));
+      if(key==='amount')bindMoneyTooltip(td,()=>modelMode==='summary'?totalMoneyFormula(r._sourceRows,r.amount):rowMoneyFormula(r));
     }
     developerCells(tr,r);
     $('rows').append(tr);
   }
-  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
+  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size-(modelMode==='summary'&&visibleColumns().has('model_name')?1:0)+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
   const tr=document.createElement('tr');cell(tr,'总计','','username');if(detailMode==='token')cell(tr,'','token-name');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
   for(const key of ['group_ratio','input_price','output_price','cache_price','write_price'])cell(tr,'','',key);
   bindMoneyTooltip(cell(tr,number(total.amount),'','amount'),()=>totalMoneyFormula(data,total.amount));
@@ -156,9 +173,13 @@ function setDetailMode(mode){
   detailMode=mode;
   document.querySelectorAll('[data-detail-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.detailMode===mode)));
 }
+function setModelMode(mode){
+  modelMode=mode;
+  document.querySelectorAll('[data-model-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.modelMode===mode)));
+}
 function updateReportStatus(){
   const rows=selectedRows();
-  const label=detailMode==='token'?'用户令牌模型汇总':'用户模型汇总';
+  const label=modelMode==='summary'?(detailMode==='token'?'用户令牌汇总':'用户汇总'):(detailMode==='token'?'用户令牌模型汇总':'用户模型汇总');
   $('status').className='';
   $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${rows.length} 条${label}`;
   if(snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
@@ -221,6 +242,13 @@ document.querySelectorAll('[data-detail-mode]').forEach(button=>button.addEventL
   }
   catch(error){setDetailMode('summary');renderDetails();$('status').className='error';$('status').textContent=error.message;}
   finally{document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=false);}
+}));
+document.querySelectorAll('[data-model-mode]').forEach(button=>button.addEventListener('click',()=>{
+  const mode=button.dataset.modelMode;
+  if(mode===modelMode)return;
+  setModelMode(mode);
+  if(snapshot){renderDetails();updateReportStatus();}
+  else applyColumnVisibility();
 }));
 function render() {
   const data=snapshot.rows;

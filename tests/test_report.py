@@ -74,6 +74,10 @@ class ReportTest(unittest.TestCase):
             self.assertIn("用量统计</title>", text)
             self.assertIn("令牌汇总", text)
             self.assertIn("分令牌", text)
+            self.assertIn(
+                'data-model-mode="summary" aria-pressed="false">模型汇总', text
+            )
+            self.assertIn('data-model-mode="model" aria-pressed="true">分模型', text)
             self.assertIn("data-token-column hidden", text)
             self.assertIn('id="token-filter"', text)
             self.assertIn("筛选令牌", text)
@@ -84,6 +88,8 @@ class ReportTest(unittest.TestCase):
             self.assertIn("filter-search", script)
             self.assertIn("row.style.display=matched?'':'none'", script)
             self.assertIn("输入关键字筛选", script)
+            self.assertIn("function aggregateModels(data)", script)
+            self.assertIn("modelMode==='summary'", script)
             presets = Path(app.static_folder, "presets.js").read_text()
             self.assertIn("preset === 'current-month'", presets)
             stylesheet = Path(app.static_folder, "app.css").read_text()
