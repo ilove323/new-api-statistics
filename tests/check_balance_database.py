@@ -202,6 +202,110 @@ def main():
                     [2],
                 )
             assert filtered == {date(2026, 1, 1): Decimal(5)}
+            with patch("new_api_statistics.balance.psycopg.connect", connect):
+                detailed = balance.source_amounts_with_raw(
+                    [date(2026, 1, 1)],
+                    datetime(2026, 2, 1, tzinfo=TZ),
+                    [2],
+                )
+            assert detailed == {
+                date(2026, 1, 1): {"raw": Decimal(15), "filtered": Decimal(5)}
+            }
+
+            # Historical recalculation atomically changes archives and exclusions.
+            with connect() as conn:
+                settings = conn.execute(
+                    "SELECT * FROM balance_settings WHERE id=1"
+                ).fetchone()
+                archived_before = {
+                    row["month"]: row["amount"]
+                    for row in conn.execute(
+                        "SELECT month,amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (settings["start_month"], rollover.date()),
+                    ).fetchall()
+                }
+
+            def complete_history(months, now, excluded_channel_ids):
+                assert excluded_channel_ids == [2]
+                return {
+                    month: {
+                        "raw": archived_before[month] + 10,
+                        "filtered": archived_before[month] - 5,
+                    }
+                    for month in months
+                }
+
+            recalculate_body = dict(
+                budget=str(settings["budget"]),
+                threshold=str(settings["threshold"]),
+                enabled=settings["enabled"],
+                start_month=settings["start_month"].strftime("%Y-%m"),
+                version=settings["version"],
+                excluded_channel_ids=[2],
+            )
+            with patch(
+                "new_api_statistics.balance.source_amounts_with_raw",
+                complete_history,
+            ):
+                result = balance.recalculate_history(
+                    recalculate_body, "test_admin", rollover
+                )
+            assert result == {"version": settings["version"] + 1, "months": 3}
+            with connect() as conn:
+                recalculated = {
+                    row["month"]: row["amount"]
+                    for row in conn.execute(
+                        "SELECT month,amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (settings["start_month"], rollover.date()),
+                    ).fetchall()
+                }
+                assert recalculated == {
+                    month: amount - 5 for month, amount in archived_before.items()
+                }
+                assert conn.execute(
+                    "SELECT channel_id FROM balance_excluded_channels"
+                ).fetchall() == [{"channel_id": 2}]
+
+            def incomplete_history(months, now, excluded_channel_ids):
+                return {
+                    month: {
+                        "raw": recalculated[month] - 1,
+                        "filtered": Decimal(0),
+                    }
+                    for month in months
+                }
+
+            failed_body = dict(
+                recalculate_body,
+                version=result["version"],
+                excluded_channel_ids=[3],
+            )
+            try:
+                with patch(
+                    "new_api_statistics.balance.source_amounts_with_raw",
+                    incomplete_history,
+                ):
+                    balance.recalculate_history(failed_body, "test_admin", rollover)
+                raise AssertionError("incomplete source history replaced archives")
+            except balance.HistoryDataMissing:
+                pass
+            with connect() as conn:
+                assert (
+                    conn.execute(
+                        "SELECT version FROM balance_settings WHERE id=1"
+                    ).fetchone()["version"]
+                    == result["version"]
+                )
+                assert conn.execute(
+                    "SELECT channel_id FROM balance_excluded_channels"
+                ).fetchall() == [{"channel_id": 2}]
+                assert {
+                    row["month"]: row["amount"]
+                    for row in conn.execute(
+                        "SELECT month,amount FROM balance_months WHERE month >= %s AND month < %s",
+                        (settings["start_month"], rollover.date()),
+                    ).fetchall()
+                } == recalculated
             # Simulate an older installation with multiple resolved alerts and reads.
             with connect() as conn:
                 conn.execute("DROP TABLE schema_migrations")

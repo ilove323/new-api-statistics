@@ -130,6 +130,43 @@ class BalanceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"rows": rows})
 
+    def test_recalculate_history_endpoint_and_fail_closed(self):
+        client = app.test_client()
+        body = self.body(excluded_channel_ids=[2])
+        result = {"version": 2, "months": 3}
+        with (
+            patch("new_api_statistics.app.verify_admin", return_value=True),
+            patch(
+                "new_api_statistics.balance.recalculate_history",
+                return_value=result,
+            ) as recalculate,
+        ):
+            url = "/statistics/api/balance/recalculate-history"
+            self.assertEqual(
+                client.post(url, json=body, auth=("test_admin", "test")).status_code,
+                403,
+            )
+            response = client.post(
+                url,
+                json=body,
+                auth=("test_admin", "test"),
+                headers={"X-Statistics-Request": "1"},
+            )
+            self.assertEqual(
+                response.get_json(),
+                {"recalculated": True, "version": 2, "months": 3},
+            )
+            recalculate.assert_called_once_with(body, "test_admin")
+            recalculate.side_effect = balance.HistoryDataMissing()
+            failed = client.post(
+                url,
+                json=body,
+                auth=("test_admin", "test"),
+                headers={"X-Statistics-Request": "1"},
+            )
+            self.assertEqual(failed.status_code, 409)
+            self.assertIn("原归档", failed.get_json()["error"])
+
     def test_month_boundaries(self):
         self.assertEqual(
             balance.month_list(date(2025, 12, 1), date(2026, 3, 1)),

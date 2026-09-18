@@ -213,6 +213,26 @@ def balance_settings():
     return jsonify(saved=True)
 
 
+@app.post("/statistics/api/balance/recalculate-history")
+def balance_recalculate_history():
+    if not monitor_write_allowed():
+        return jsonify(error="不允许的追溯请求。"), 403
+    try:
+        result = balance.recalculate_history(
+            request.get_json(), request.authorization.username
+        )
+    except balance.SettingsConflict:
+        return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
+    except balance.HistoryDataMissing:
+        return (
+            jsonify(
+                error="New API 历史日志不完整或缺少旧归档，已取消追溯，原归档和渠道设置保持不变。"
+            ),
+            409,
+        )
+    return jsonify(recalculated=True, **result)
+
+
 @app.get("/statistics/api/balance/usage-channels")
 def balance_usage_channels():
     return jsonify(rows=balance.usage_channels_snapshot())

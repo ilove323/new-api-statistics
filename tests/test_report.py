@@ -87,6 +87,7 @@ class ReportTest(unittest.TestCase):
             self.assertIn('data-settings-tab="balance"', text)
             self.assertIn('data-settings-tab="notification"', text)
             self.assertIn('id="usage-channel-options"', text)
+            self.assertIn('id="balance-recalculate"', text)
             script = Path(app.static_folder, "app.js").read_text()
             self.assertIn("filter-search", script)
             self.assertIn("row.style.display=matched?'':'none'", script)

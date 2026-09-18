@@ -10,6 +10,9 @@ async function balanceRequest(path,options={}){
   return data;
 }
 function balanceWrite(method,body){return {method,headers:{'Content-Type':'application/json','X-Statistics-Request':'1'},body:JSON.stringify(body)};}
+function balanceSettingsBody(){
+  return {enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion,excluded_channel_ids:[...document.querySelectorAll('#usage-channel-options input:not(:checked)')].map(input=>Number(input.value))};
+}
 function renderBalance(){
   const data=balanceData;
   $('balance-summary').replaceChildren();$('balance-months').replaceChildren();$('balance-alert-list').replaceChildren();
@@ -94,11 +97,27 @@ $('balance-form').addEventListener('submit',async event=>{
   event.preventDefault();$('balance-save').disabled=true;
   $('balance-settings-status').textContent='正在保存设置并归档历史月份…';
   try{
-    const excluded_channel_ids=[...document.querySelectorAll('#usage-channel-options input:not(:checked)')].map(input=>Number(input.value));
-    await balanceRequest('/settings',balanceWrite('PUT',{enabled:$('balance-enabled').checked,budget:$('balance-budget').value,threshold:$('balance-threshold').value,start_month:$('balance-start').value,version:balanceVersion,excluded_channel_ids}));
+    await balanceRequest('/settings',balanceWrite('PUT',balanceSettingsBody()));
     $('balance-settings').close();$('balance-alerts').showModal();await refreshBalance();
   }catch(e){$('balance-settings-status').textContent=e.message;}
   finally{$('balance-save').disabled=false;}
+});
+$('balance-recalculate').addEventListener('click',async()=>{
+  const warnings=[
+    '追溯会按照当前页面中的渠道规则重新计算并覆盖已有月度归档。是否继续？',
+    '该操作会重算累计起始月份至上月的全部历史计费。若 New API 历史日志不完整，操作将失败并保留旧数据。再次确认？',
+    '最后确认：确定立即追溯历史计费吗？',
+  ];
+  if(warnings.some(message=>!window.confirm(message)))return;
+  $('balance-recalculate').disabled=true;$('balance-save').disabled=true;
+  $('balance-settings-status').textContent='正在核对历史日志并重新计算，请勿关闭页面…';
+  try{
+    const result=await balanceRequest('/recalculate-history',balanceWrite('POST',balanceSettingsBody()));
+    balanceVersion=result.version;
+    $('balance-settings-status').textContent=`追溯完成，已重新计算 ${result.months} 个月。`;
+    await refreshBalance(true);
+  }catch(e){$('balance-settings-status').textContent=e.message;}
+  finally{$('balance-recalculate').disabled=false;$('balance-save').disabled=false;}
 });
 $('usage-channels-all').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=true));
 $('usage-channels-none').addEventListener('click',()=>document.querySelectorAll('#usage-channel-options input').forEach(input=>input.checked=false));
