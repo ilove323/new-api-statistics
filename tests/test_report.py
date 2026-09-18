@@ -90,6 +90,8 @@ class ReportTest(unittest.TestCase):
             self.assertIn("输入关键字筛选", script)
             self.assertIn("function aggregateModels(data)", script)
             self.assertIn("modelMode==='summary'", script)
+            self.assertIn("const modelSummaryColumns", script)
+            self.assertIn("input.checked=false;input.disabled=true", script)
             presets = Path(app.static_folder, "presets.js").read_text()
             self.assertIn("preset === 'current-month'", presets)
             stylesheet = Path(app.static_folder, "app.css").read_text()

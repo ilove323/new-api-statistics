@@ -10,7 +10,9 @@ let modelMode = 'model';
 let ranking = 'model_amount';
 const tokenFields = ['total_tokens','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'];
 const detailColumns = ['username','request_count','model_name',...tokenFields,'group_ratio','input_price','output_price','cache_price','write_price','amount'];
+const modelSummaryColumns = ['group_ratio','input_price','output_price','cache_price','write_price'];
 const columnStorageKey = 'new-api-statistics.visible-columns';
+let modelColumnSelection = null;
 const number = (n, digits=6) => n === null || n === undefined ? '—' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:digits});
 const cell = (tr, value, cls='', column='') => {const td=document.createElement('td');td.textContent=value;td.className=cls;if(column)td.dataset.column=column;tr.append(td);return td;};
 const userCell = (tr,row) => {
@@ -44,15 +46,18 @@ function visibleColumns(){
   return new Set([...document.querySelectorAll('[data-column-toggle]:checked')].map(input=>input.dataset.columnToggle));
 }
 function saveVisibleColumns(){
-  try{localStorage.setItem(columnStorageKey,JSON.stringify([...visibleColumns()]));}catch{}
+  const visible=visibleColumns();
+  if(modelMode==='summary'&&modelColumnSelection)modelColumnSelection.forEach(column=>visible.add(column));
+  try{localStorage.setItem(columnStorageKey,JSON.stringify([...visible]));}catch{}
 }
 function applyColumnVisibility(){
   const visible=visibleColumns();
+  const hiddenByMode=new Set(modelMode==='summary'?['model_name',...modelSummaryColumns]:[]);
   document.querySelectorAll('#usage-table [data-column]').forEach(element=>{
-    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column)||(element.dataset.column==='model_name'&&modelMode==='summary');
+    if(detailColumns.includes(element.dataset.column))element.hidden=!visible.has(element.dataset.column)||hiddenByMode.has(element.dataset.column);
   });
   document.querySelectorAll('#usage-table [data-token-column]').forEach(element=>element.hidden=detailMode!=='token');
-  const columns=visible.size-(modelMode==='summary'&&visible.has('model_name')?1:0)+(detailMode==='token'?1:0)+(developerMode?2:0);
+  const columns=[...visible].filter(column=>!hiddenByMode.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);
   $('usage-table').style.setProperty('--usage-table-min-width',Math.max(480,columns*115)+'px');
 }
 function loadVisibleColumns(){
@@ -161,7 +166,7 @@ function renderDetails() {
     developerCells(tr,r);
     $('rows').append(tr);
   }
-  if(!data.length){const tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=visibleColumns().size-(modelMode==='summary'&&visibleColumns().has('model_name')?1:0)+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
+  if(!data.length){const hidden=modelMode==='summary'?new Set(['model_name',...modelSummaryColumns]):new Set(),tr=document.createElement('tr');cell(tr,'该时间范围内暂无消费记录','empty').colSpan=[...visibleColumns()].filter(column=>!hidden.has(column)).length+(detailMode==='token'?1:0)+(developerMode?2:0);$('rows').append(tr);}
   const tr=document.createElement('tr');cell(tr,'总计','','username');if(detailMode==='token')cell(tr,'','token-name');cell(tr,number(total.request_count,0),'','request_count');cell(tr,'','','model_name');tokenFields.forEach(k=>cell(tr,number(total[k],0),'',k));
   for(const key of ['group_ratio','input_price','output_price','cache_price','write_price'])cell(tr,'','',key);
   bindMoneyTooltip(cell(tr,number(total.amount),'','amount'),()=>totalMoneyFormula(data,total.amount));
@@ -174,6 +179,14 @@ function setDetailMode(mode){
   document.querySelectorAll('[data-detail-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.detailMode===mode)));
 }
 function setModelMode(mode){
+  const toggles=[...document.querySelectorAll('[data-column-toggle]')].filter(input=>modelSummaryColumns.includes(input.dataset.columnToggle));
+  if(mode==='summary'&&modelMode!=='summary'){
+    modelColumnSelection=new Set(toggles.filter(input=>input.checked).map(input=>input.dataset.columnToggle));
+    toggles.forEach(input=>{input.checked=false;input.disabled=true;});
+  }else if(mode==='model'&&modelMode==='summary'){
+    toggles.forEach(input=>{input.disabled=false;input.checked=modelColumnSelection?.has(input.dataset.columnToggle)??false;});
+    modelColumnSelection=null;
+  }
   modelMode=mode;
   document.querySelectorAll('[data-model-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.modelMode===mode)));
 }
@@ -182,7 +195,7 @@ function updateReportStatus(){
   const label=modelMode==='summary'?(detailMode==='token'?'用户令牌汇总':'用户汇总'):(detailMode==='token'?'用户令牌模型汇总':'用户模型汇总');
   $('status').className='';
   $('status').textContent=`${snapshot.start.replace('T',' ')} 至 ${snapshot.end.replace('T',' ')} · ${rows.length} 条${label}`;
-  if(snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
+  if(modelMode==='model'&&snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
 }
 async function loadTokenDetails(){
   if(tokenSnapshot||!snapshot)return;
@@ -326,7 +339,7 @@ document.querySelectorAll('[data-column-toggle]').forEach(input=>input.addEventL
   if(!document.querySelector('[data-column-toggle]:checked'))input.checked=true;
   saveVisibleColumns();applyColumnVisibility();
 }));
-$('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
+$('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]:not(:disabled)').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
 $('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end}));});
 loadVisibleColumns();applyColumnVisibility();
 query();
