@@ -2,12 +2,11 @@
 
 ## Unreleased
 
-- Add uncached live balance JSON and an independent alert endpoint authenticated with existing New API administrator PATs.
+## 0.1.1 - 2026-09-20
 
-- Add `?dev=2` failure-request diagnostics grouped by HTTP status across the
-  current user, model, token and group dimensions without changing Excel exports.
-
-## 0.1.1 - 2026-09-18
+- Add uncached live balance JSON and independent alert endpoints using New API administrator PAT Bearer authentication.
+- Add browser-only dev=2 failure status diagnostics across report dimensions.
+- Fix PostgreSQL test fixtures missing the group column and expand API regression coverage.
 
 - Add searchable multi-select user, model, token and group filters to the usage detail table.
 - Add token/model aggregation modes and context-aware detail column visibility controls.
