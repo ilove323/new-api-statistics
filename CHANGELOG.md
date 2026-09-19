@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add uncached live balance JSON and an independent alert endpoint authenticated with existing New API Bearer keys.
+- Add uncached live balance JSON and an independent alert endpoint authenticated with existing New API administrator PATs.
 
 - Add `?dev=2` failure-request diagnostics grouped by HTTP status across the
   current user, model, token and group dimensions without changing Excel exports.

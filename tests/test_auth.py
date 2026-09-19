@@ -48,22 +48,22 @@ class AuthTest(unittest.TestCase):
         self.assertFalse(verify_admin("", "testing"))
         self.assertFalse(verify_admin("test_admin", "a" * 73))
 
-    def test_api_key_uses_new_api_token_table_and_sk_prefix(self):
+    def test_api_key_uses_admin_pat_without_prefix_rewriting(self):
         with patch("new_api_statistics.auth.psycopg.connect") as connect:
             conn = connect.return_value.__enter__.return_value
             conn.execute.return_value.fetchone.return_value = {"id": 12}
             self.assertTrue(verify_api_key("sk-fixture"))
             query, params = conn.execute.call_args.args
-            self.assertIn("FROM tokens", query)
-            self.assertIn("JOIN users", query)
-            self.assertIn("t.expired_time", query)
-            self.assertEqual(params[0], "fixture")
+            self.assertIn("FROM users", query)
+            self.assertIn("access_token=%s", query)
+            self.assertIn("role>=10 AND status=1 AND deleted_at IS NULL", query)
+            self.assertEqual(params[0], "sk-fixture")
             conn.execute.return_value.fetchone.return_value = None
             self.assertFalse(verify_api_key("fixture"))
 
     def test_api_key_rejects_malformed_without_database_query(self):
         with patch("new_api_statistics.auth.psycopg.connect") as connect:
-            for value in ("", None, "sk-", "x" * 257):
+            for value in ("", None, "x" * 257):
                 self.assertFalse(verify_api_key(value))
             connect.assert_not_called()
 

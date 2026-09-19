@@ -1,22 +1,19 @@
 # 对外余额与报警 API
 
-两个独立接口均使用已有 New API 令牌认证，不创建独立 API Key：
+两个独立接口均使用已有 New API 管理员 PAT：
+`Authorization: Bearer <管理员PAT>`。
 
-```http
-Authorization: Bearer sk-<New API令牌>
-```
-
-令牌和所属用户必须启用且未删除，令牌未过期。无需管理员角色。
-此授权允许持有有效令牌的用户读取站点整体预算，并通过报警接口触发检查和通知；
-返回的不是该令牌或所属用户的个人余额。本次不提供按 Key 的独立预算。
-令牌剩余额度不参与校验，但令牌自身状态必须为启用。
+校验 users.access_token，要求 role >= 10、status = 1、未删除。
+不接受模型调用令牌（tokens.key），不剥离或添加 sk- 前缀。
+PAT 直接使用原值，包括其中的 + 等字符。PAT 更新或账号停用后立即失效。
+返回站点整体预算，不是个人或令牌余额，不提供按 Key 的独立预算。
 
 ## 实时余额
 
 `GET /statistics/api/balance`
 
 ```bash
-curl --fail-with-body   -H 'Authorization: Bearer sk-<New API令牌>'   -H 'Accept: application/json'   https://example.com/statistics/api/balance
+curl --fail-with-body   -H 'Authorization: Bearer <管理员PAT>'   -H 'Accept: application/json'   https://example.com/statistics/api/balance
 ```
 
 ```json
@@ -50,7 +47,7 @@ curl --fail-with-body   -H 'Authorization: Bearer sk-<New API令牌>'   -H 'Acce
 `GET /statistics/api/alert`
 
 ```bash
-curl --fail-with-body   -H 'Authorization: Bearer sk-<New API令牌>'   https://example.com/statistics/api/alert
+curl --fail-with-body   -H 'Authorization: Bearer <管理员PAT>'   https://example.com/statistics/api/alert
 ```
 
 每次调用执行即时检查、更新报警记录，低于阈值时调用已启用的通知渠道。
@@ -67,15 +64,10 @@ checked_at、timezone，金额为数字，时间为带时区 ISO 8601。
 ## 升级与网页兼容
 
 旧的 `/statistics/api/balance/alert` 已移至 `/statistics/api/alert`；
-调用方需同时把管理员 Basic Auth 改为 New API Bearer Key。
+调用方需同时把管理员 Basic Auth 改为 New API 管理员 PAT。
 原余额页面数据移至内部 `/statistics/api/balance/status`。
 网页及其内部管理接口仍使用管理员登录，不向普通令牌开放管理权限。
 现有 /statistics/ Nginx 转发即可覆盖新接口。只通过 HTTPS 对外使用，不在 URL 中传递凭据。
 
-数据库只读账号需具有 tokens 表 SELECT 权限，例如由数据库管理员执行：
-
-```sql
-GRANT SELECT ON TABLE public.tokens TO statistics_reader;
-```
-
-账号名、schema 应按实际配置替换；无需修改 New API 数据或新建密钥表。
+数据库只读账号需要 users 表（包含 access_token）的 SELECT 权限；
+无需 tokens 表权限，无需修改数据库结构或新建密钥表。

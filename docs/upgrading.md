@@ -44,7 +44,7 @@ docker compose -f compose.release.yml logs --tail=100 balance-worker
 
 ## 开发版余额 API 变更
 
-对外接口改用 New API Bearer Key：报警路径改为 /statistics/api/alert；
+对外接口改用 New API 管理员 PAT：报警路径改为 /statistics/api/alert；
 /statistics/api/balance 返回实时余额，不再返回网页内部状态。网页状态已同步迁移。
-升级前给只读账号增加 tokens 表 SELECT 权限；无需数据库结构迁移。
+只读账号需具备 users.access_token 查询权限；无需数据库结构迁移。
 具体请求和权限范围见 [API 文档](api.md)。

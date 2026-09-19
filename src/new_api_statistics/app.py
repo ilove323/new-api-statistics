@@ -51,7 +51,7 @@ def authenticate():
         if separator and scheme.lower() == "bearer" and verify_api_key(token.strip()):
             return None
         return (
-            jsonify(code=401, message="无效或已失效的 New API Key。"),
+            jsonify(code=401, message="无效的 New API 管理员 PAT，或账号已停用。"),
             401,
             {"WWW-Authenticate": "Bearer"},
         )
