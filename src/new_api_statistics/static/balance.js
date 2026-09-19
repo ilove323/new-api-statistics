@@ -5,7 +5,8 @@ let historyPreview=null;
 const balanceMoney=value=>value===null||value===undefined?'—':'¥ '+number(value,2);
 const balanceTime=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
 async function balanceRequest(path,options={}){
-  const response=await fetch('/statistics/api/balance'+path,options);
+  const root=!path||path.startsWith('?')?'/statistics/api/balance/status':'/statistics/api/balance';
+  const response=await fetch(root+path,options);
   let data;try{data=await response.json();}catch{throw new Error('监控服务暂不可用，请稍后重试。');}
   if(!response.ok)throw new Error(data.error||'监控请求失败。');
   return data;

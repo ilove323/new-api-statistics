@@ -88,14 +88,14 @@ http://<服务器IP>:8091/statistics/
 报警 API 地址相应为：
 
 ```text
-http://<服务器IP>:8091/statistics/api/balance/alert
+http://<服务器IP>:8091/statistics/api/alert
 ```
 
 示例：
 
 ```bash
-curl -u '<管理员用户名>:<管理员密码>' \
-  http://<服务器IP>:8091/statistics/api/balance/alert
+curl -H 'Authorization: Bearer <管理员PAT>' \
+  http://<服务器IP>:8091/statistics/api/alert
 ```
 
 该方式确实对外提供宿主机端口，不需要 Nginx。由于登录使用 HTTP Basic Auth，普通 HTTP 会以可还原形式传输凭据，

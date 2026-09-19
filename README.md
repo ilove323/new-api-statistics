@@ -45,7 +45,7 @@ New API Statistics 是配合 [QuantumNous/new-api](https://github.com/QuantumNou
 | 余额监控 | 按月、渠道完整归档费用，支持历史追溯覆盖，并动态筛选计入预算和报警的渠道 |
 | 定时检查 | 每天北京时间 10:00 检查，也可通过铃铛或 API 手动触发 |
 | 通知渠道 | 支持飞书企业自建应用与钉钉自定义 Webhook 机器人 |
-| 报警 API | 返回结构化余额报警数据，使用管理员账号密码认证 |
+| 报警 API | 实时余额与报警检查，使用 New API 管理员 PAT Bearer 认证 |
 
 Token 缓存语义取决于上游日志。部分报表数值涉及数学折算，
 请先阅读[统计口径](docs/calculation.md)。应用不会修改 New API 原始日志和实际消费金额。

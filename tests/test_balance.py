@@ -11,6 +11,103 @@ from new_api_statistics.app import app
 
 
 class BalanceTest(unittest.TestCase):
+    def test_external_balance_api_uses_bearer_and_live_snapshot(self):
+        snapshot = {
+            "configured": True,
+            "valid": True,
+            "settings": {"budget": Decimal("220000"), "threshold": Decimal("2000")},
+            "state": {
+                "archived_amount": Decimal("189626.08"),
+                "current_amount": Decimal("28416.83"),
+                "remaining": Decimal("1957.09"),
+                "checked_at": datetime(2026, 9, 16, 23, 34, 46, tzinfo=balance.TZ),
+            },
+        }
+        with (
+            patch("new_api_statistics.app.verify_api_key", return_value=True) as verify,
+            patch("new_api_statistics.balance.snapshot", return_value=snapshot) as load,
+            patch("new_api_statistics.app.load_site_name", return_value="三生AI网关"),
+            patch("new_api_statistics.balance.check_once") as check,
+        ):
+            response = app.test_client().get(
+                "/statistics/api/balance",
+                headers={"Authorization": "Bearer sk-fixture"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "code": 0,
+                "data": {
+                    "site": "三生AI网关",
+                    "currency": "CNY",
+                    "total_quota": 220000.0,
+                    "used_quota": 218042.91,
+                    "remaining_quota": 1957.09,
+                    "alert_threshold": 2000.0,
+                    "usage_percent": 99.11,
+                    "checked_at": "2026-09-16T23:34:46+08:00",
+                },
+            },
+        )
+        verify.assert_called_once_with("sk-fixture")
+        load.assert_called_once_with(live=True)
+        check.assert_not_called()
+
+    def test_external_balance_api_rejects_basic_and_unavailable_data(self):
+        client = app.test_client()
+        with patch("new_api_statistics.app.verify_admin", return_value=True):
+            response = client.get(
+                "/statistics/api/balance", auth=("test_admin", "test")
+            )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
+        with (
+            patch("new_api_statistics.app.verify_api_key", return_value=True),
+            patch(
+                "new_api_statistics.balance.snapshot",
+                return_value={"configured": True, "valid": False},
+            ),
+        ):
+            response = client.get(
+                "/statistics/api/balance",
+                headers={"Authorization": "Bearer fixture"},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["code"], 503)
+
+    def test_balance_recalculates_each_time_without_alert_side_effects(self):
+        fixture = {
+            "configured": True,
+            "valid": True,
+            "settings": {"budget": Decimal(0), "threshold": Decimal(10)},
+            "state": {
+                "archived_amount": Decimal(1),
+                "current_amount": Decimal(2),
+                "remaining": Decimal(-3),
+                "checked_at": datetime(2026, 9, 19, tzinfo=balance.TZ),
+            },
+        }
+        with (
+            patch("new_api_statistics.app.verify_api_key", return_value=True),
+            patch("new_api_statistics.balance.snapshot", return_value=fixture) as load,
+            patch("new_api_statistics.app.load_site_name", return_value="fixture"),
+            patch("new_api_statistics.balance.check_once") as check,
+            patch("new_api_statistics.notifications.notify_safely") as notify,
+        ):
+            for _ in range(2):
+                response = app.test_client().get(
+                    "/statistics/api/balance",
+                    headers={"Authorization": "Bearer fixture"},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(response.json["data"]["usage_percent"])
+                self.assertEqual(response.json["data"]["remaining_quota"], -3)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(load.call_count, 2)
+            check.assert_not_called()
+            notify.assert_not_called()
+
     def test_next_run_at_ten(self):
         before = datetime(2026, 9, 16, 9, 59, tzinfo=balance.TZ)
         self.assertEqual(

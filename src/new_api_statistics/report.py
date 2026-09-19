@@ -14,6 +14,26 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 SQL = Path(__file__).with_name("usage.sql").read_text()
+FAILURE_SQL = """WITH errors AS MATERIALIZED (
+    SELECT id,created_at,user_id,username,token_id,token_name,model_name,
+           COALESCE(NULLIF(COALESCE(NULLIF(btrim(other), ''), '{}')::jsonb
+             ->>'status_code', ''), '未知') AS status_code
+    FROM logs
+    WHERE type=5 AND created_at >= %(start)s AND created_at < %(end)s
+      AND (%(token_ids)s::bigint[] IS NULL OR token_id = ANY(%(token_ids)s::bigint[]))
+      AND (%(groups)s::text[] IS NULL OR COALESCE("group", '') = ANY(%(groups)s::text[]))
+), grouped AS (
+    SELECT user_id,username,
+           CASE WHEN %(by_token)s THEN token_id ELSE 0 END AS token_id,
+           model_name,status_code,COUNT(*) AS failure_count,MAX(created_at) AS latest_at,
+           (array_agg(COALESCE(NULLIF(btrim(token_name), ''), '未知令牌')
+             ORDER BY created_at DESC,id DESC))[1] AS token_name
+    FROM errors
+    GROUP BY user_id,username,CASE WHEN %(by_token)s THEN token_id ELSE 0 END,
+             model_name,status_code
+)
+SELECT * FROM grouped
+ORDER BY username,user_id,token_id,model_name,status_code"""
 TZ = ZoneInfo("Asia/Shanghai")
 TOKEN_FIELDS = [
     "input_tokens",
@@ -219,7 +239,81 @@ def load_site_name():
     return (row[0] or "").strip() if row and (row[0] or "").strip() else "New API"
 
 
-def load_report(start, end, *, by_token=False, token_ids=None, groups=None):
+def failure_key(row, by_token):
+    key = (row["user_id"], row["username"], row["model_name"])
+    return key + ((row.get("token_id"),) if by_token else ())
+
+
+def merge_failures(rows, failures, by_token):
+    """Attach status counts and retain dimensions that have only failed requests."""
+    by_key = {failure_key(row, by_token): row for row in rows}
+    latest = {}
+    for failure in failures:
+        key = failure_key(failure, by_token)
+        row = by_key.get(key)
+        if row is None:
+            row = dict(
+                user_id=failure["user_id"],
+                username=failure["username"],
+                token_id=failure["token_id"],
+                token_name=failure["token_name"] if by_token else "",
+                model_name=failure["model_name"],
+                request_count=0,
+                ratio_count=0,
+                raw_input_tokens=0,
+                input_tokens=0,
+                output_tokens=0,
+                cache_write_tokens=0,
+                cache_read_tokens=0,
+                pricing_input_tokens=0,
+                total_tokens=0,
+                amount=Decimal(0),
+                group_ratio=None,
+            )
+            rows.append(row)
+            by_key[key] = row
+        row.setdefault("failure_codes", {})[failure["status_code"]] = int(
+            failure["failure_count"]
+        )
+        previous_latest = latest.get(key)
+        if by_token and (
+            previous_latest is None or failure["latest_at"] > previous_latest
+        ):
+            row["token_name"] = failure["token_name"]
+            latest[key] = failure["latest_at"]
+    for row in rows:
+        codes = row.setdefault("failure_codes", {})
+        row["failure_codes"] = dict(
+            sorted(
+                codes.items(),
+                key=lambda item: (
+                    not item[0].isdigit(),
+                    int(item[0]) if item[0].isdigit() else item[0],
+                ),
+            )
+        )
+        row["failure_count"] = sum(codes.values())
+    rows.sort(
+        key=lambda row: (
+            row["username"],
+            row["user_id"],
+            row.get("token_name", ""),
+            -row["total_tokens"],
+            row["model_name"],
+        )
+    )
+    return rows
+
+
+def load_report(
+    start,
+    end,
+    *,
+    by_token=False,
+    token_ids=None,
+    groups=None,
+    include_failures=False,
+):
     """Load either user-model totals or user-token-model totals read-only."""
     first, last = period(start, end)
     with psycopg.connect(
@@ -238,6 +332,18 @@ def load_report(start, end, *, by_token=False, token_ids=None, groups=None):
                 "groups": groups,
             },
         ).fetchall()
+        if include_failures:
+            failures = conn.execute(
+                FAILURE_SQL,
+                {
+                    "start": first,
+                    "end": last,
+                    "by_token": by_token,
+                    "token_ids": token_ids,
+                    "groups": groups,
+                },
+            ).fetchall()
+            merge_failures(rows, failures, by_token)
         user_ids = list({row["user_id"] for row in rows})
         names = {}
         if user_ids:
@@ -264,7 +370,7 @@ def load_report(start, end, *, by_token=False, token_ids=None, groups=None):
     return decorate(rows, options)
 
 
-def load_token_options(start, end):
+def load_token_options(start, end, *, include_failures=False):
     """Return the latest name of each token used in the selected interval."""
     first, last = period(start, end)
     with psycopg.connect(
@@ -276,13 +382,13 @@ def load_token_options(start, end):
             """SELECT DISTINCT ON (token_id) token_id,
                       COALESCE(NULLIF(btrim(token_name), ''), '未知令牌') AS token_name
                FROM logs
-               WHERE type=2 AND created_at >= %s AND created_at < %s
+               WHERE type = ANY(%s) AND created_at >= %s AND created_at < %s
                ORDER BY token_id, created_at DESC, id DESC""",
-            (first, last),
+            ([2, 5] if include_failures else [2], first, last),
         ).fetchall()
 
 
-def load_group_options(start, end):
+def load_group_options(start, end, *, include_failures=False):
     """Return groups used in the selected interval."""
     first, last = period(start, end)
     with psycopg.connect(
@@ -293,9 +399,9 @@ def load_group_options(start, end):
         return conn.execute(
             """SELECT DISTINCT COALESCE("group", '') AS group_name
                FROM logs
-               WHERE type=2 AND created_at >= %s AND created_at < %s
+               WHERE type = ANY(%s) AND created_at >= %s AND created_at < %s
                ORDER BY group_name""",
-            (first, last),
+            ([2, 5] if include_failures else [2], first, last),
         ).fetchall()
 
 
