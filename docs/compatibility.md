@@ -12,6 +12,7 @@ CI 配置覆盖 PostgreSQL 15/16，其他版本需自行验证。尚无按 New A
 | users | id, username, display_name, password, role, status, deleted_at |
 | options | key, value |
 | channels | id, name, status |
+| tokens | id, user_id, key, status, deleted_at, expired_time |
 
 消费日志为 `type=2`，`quota / 500000` 为消费金额；`?dev=2` 的失败请求统计读取
 `type=5`，并要求 `other` 为 JSON 且包含 `status_code`。认证要求 bcrypt 密码、

@@ -272,15 +272,13 @@ class NotificationsTest(unittest.TestCase):
             "检查时间：2026-09-16 23:34:46（北京时间）",
         )
 
-    def test_alert_api_uses_new_api_admin_basic_auth(self):
+    def test_alert_api_uses_new_api_bearer_auth(self):
         client = app.test_client()
-        url = "/statistics/api/balance/alert"
+        url = "/statistics/api/alert"
         with (
             patch(
-                "new_api_statistics.app.verify_admin",
-                side_effect=lambda user, password: (
-                    user == "admin" and password == "fixture"
-                ),
+                "new_api_statistics.app.verify_api_key",
+                side_effect=lambda token: token == "sk-fixture",
             ),
             patch("new_api_statistics.balance.check_once", return_value=True) as check,
             patch(
@@ -289,8 +287,13 @@ class NotificationsTest(unittest.TestCase):
             ) as load,
         ):
             self.assertEqual(client.get(url).status_code, 401)
-            self.assertEqual(client.get(url, auth=("admin", "wrong")).status_code, 401)
-            response = client.get(url, auth=("admin", "fixture"))
+            self.assertEqual(
+                client.get(
+                    url, headers={"Authorization": "Bearer sk-wrong"}
+                ).status_code,
+                401,
+            )
+            response = client.get(url, headers={"Authorization": "Bearer sk-fixture"})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.mimetype, "application/json")
             self.assertEqual(
@@ -300,11 +303,11 @@ class NotificationsTest(unittest.TestCase):
             check.assert_called_once_with(daily=False)
             load.assert_called_once_with()
             load.return_value = None
-            response = client.get(url, auth=("admin", "fixture"))
+            response = client.get(url, headers={"Authorization": "Bearer sk-fixture"})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json(), {"has_alert": False, "alert": None})
             check.side_effect = balance.CheckBusy()
-            response = client.get(url, auth=("admin", "fixture"))
+            response = client.get(url, headers={"Authorization": "Bearer sk-fixture"})
             self.assertEqual(response.status_code, 409)
             self.assertIn("error", response.get_json())
 

@@ -6,7 +6,7 @@
 
 - 已运行的 New API、PostgreSQL 和 Docker Compose；Nginx 为可选。
 - 统计容器加入 New API 的现有 Docker 网络，不新建或替换其数据库。
-- 数据库账号具有 SELECT `logs`、`options`、`users`、`channels` 的权限，建议使用专用只读账号。
+- 数据库账号具有 SELECT `logs`、`options`、`users`、`channels`、`tokens` 的权限，建议使用专用只读账号。
 - 使用 Nginx 时默认其运行在同一宿主机上；容器化 Nginx 和无 Nginx 的访问方式见下文。
 
 ## 配置与启动
@@ -88,14 +88,14 @@ http://<服务器IP>:8091/statistics/
 报警 API 地址相应为：
 
 ```text
-http://<服务器IP>:8091/statistics/api/balance/alert
+http://<服务器IP>:8091/statistics/api/alert
 ```
 
 示例：
 
 ```bash
-curl -u '<管理员用户名>:<管理员密码>' \
-  http://<服务器IP>:8091/statistics/api/balance/alert
+curl -H 'Authorization: Bearer sk-<New API令牌>' \
+  http://<服务器IP>:8091/statistics/api/alert
 ```
 
 该方式确实对外提供宿主机端口，不需要 Nginx。由于登录使用 HTTP Basic Auth，普通 HTTP 会以可还原形式传输凭据，

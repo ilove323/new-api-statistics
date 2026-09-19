@@ -24,7 +24,7 @@ from new_api_statistics.report import (
     rankings,
     load_site_name,
 )
-from new_api_statistics.auth import verify_admin
+from new_api_statistics.auth import verify_admin, verify_api_key
 
 app = Flask(__name__, static_url_path="/statistics/static")
 
@@ -45,6 +45,16 @@ app.json = JSONProvider(app)
 def authenticate():
     if request.path == "/healthz":
         return None
+    if request.path in {"/statistics/api/balance", "/statistics/api/alert"}:
+        authorization = request.headers.get("Authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if separator and scheme.lower() == "bearer" and verify_api_key(token.strip()):
+            return None
+        return (
+            jsonify(code=401, message="无效或已失效的 New API Key。"),
+            401,
+            {"WWW-Authenticate": "Bearer"},
+        )
     auth = request.authorization
     if (
         not auth
@@ -205,12 +215,38 @@ def monitor_write_allowed():
     )
 
 
-@app.get("/statistics/api/balance")
+@app.get("/statistics/api/balance/status")
 def balance_status():
     return jsonify(balance.snapshot(live=request.args.get("live") == "1"))
 
 
-@app.get("/statistics/api/balance/alert")
+@app.get("/statistics/api/balance")
+def balance_api():
+    result = balance.snapshot(live=True)
+    if not result.get("configured") or not result.get("valid"):
+        return jsonify(code=503, message="余额数据暂不可用。"), 503
+    settings, state = result["settings"], result["state"]
+    used = state["archived_amount"] + state["current_amount"]
+    budget = settings["budget"]
+    percent = float((used * 100 / budget).quantize(Decimal("0.01"))) if budget else None
+    return jsonify(
+        code=0,
+        data={
+            "site": load_site_name(),
+            "currency": "CNY",
+            "total_quota": float(budget),
+            "used_quota": float(used),
+            "remaining_quota": float(state["remaining"]),
+            "alert_threshold": float(settings["threshold"]),
+            "usage_percent": percent,
+            "checked_at": state["checked_at"]
+            .astimezone(TZ)
+            .isoformat(timespec="seconds"),
+        },
+    )
+
+
+@app.get("/statistics/api/alert")
 def balance_alert_api():
     try:
         balance.check_once(daily=False)

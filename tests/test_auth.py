@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 import bcrypt
-from new_api_statistics.auth import verify_admin
+from new_api_statistics.auth import verify_admin, verify_api_key
 from new_api_statistics.app import app
 
 
@@ -47,6 +47,37 @@ class AuthTest(unittest.TestCase):
             self.assertFalse(verify_admin("test_admin", "testing"))
         self.assertFalse(verify_admin("", "testing"))
         self.assertFalse(verify_admin("test_admin", "a" * 73))
+
+    def test_api_key_uses_new_api_token_table_and_sk_prefix(self):
+        with patch("new_api_statistics.auth.psycopg.connect") as connect:
+            conn = connect.return_value.__enter__.return_value
+            conn.execute.return_value.fetchone.return_value = {"id": 12}
+            self.assertTrue(verify_api_key("sk-fixture"))
+            query, params = conn.execute.call_args.args
+            self.assertIn("FROM tokens", query)
+            self.assertIn("JOIN users", query)
+            self.assertIn("t.expired_time", query)
+            self.assertEqual(params[0], "fixture")
+            conn.execute.return_value.fetchone.return_value = None
+            self.assertFalse(verify_api_key("fixture"))
+
+    def test_api_key_rejects_malformed_without_database_query(self):
+        with patch("new_api_statistics.auth.psycopg.connect") as connect:
+            for value in ("", None, "sk-", "x" * 257):
+                self.assertFalse(verify_api_key(value))
+            connect.assert_not_called()
+
+    def test_bearer_cannot_access_web_admin_endpoints(self):
+        with patch("new_api_statistics.app.verify_api_key", return_value=True):
+            for route in (
+                "/statistics/api/balance/status",
+                "/statistics/api/balance/settings",
+                "/statistics/api/usage",
+            ):
+                response = app.test_client().get(
+                    route, headers={"Authorization": "Bearer fixture"}
+                )
+                self.assertEqual(response.status_code, 401)
 
     def test_page_and_all_protected_routes(self):
         client = app.test_client()

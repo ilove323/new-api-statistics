@@ -41,3 +41,10 @@ docker compose -f compose.release.yml logs --tail=100 balance-worker
 处于选中状态时切换到 `dingtalk_webhook`、关闭通知并提示重新配置。飞书配置、预算、警报和
 已有月度总额不会因此删除。重新启用前请在“报警渠道”中填写 Webhook URL，并按机器人安全
 设置决定是否填写加签密钥。
+
+## 开发版余额 API 变更
+
+对外接口改用 New API Bearer Key：报警路径改为 /statistics/api/alert；
+/statistics/api/balance 返回实时余额，不再返回网页内部状态。网页状态已同步迁移。
+升级前给只读账号增加 tokens 表 SELECT 权限；无需数据库结构迁移。
+具体请求和权限范围见 [API 文档](api.md)。
