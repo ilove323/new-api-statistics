@@ -217,32 +217,36 @@ function updateReportStatus(){
   if(modelMode==='model'&&snapshot.rows.some(r=>['input_price','output_price','cache_price','write_price'].some(k=>r[k]===null)))$('status').textContent+=' · 部分当前价格未配置，显示为 —';
 }
 async function loadTokenDetails(){
+  const ticket=Scope.epoch;
   if(tokenSnapshot||!snapshot)return;
   const expected=`${snapshot.start}\n${snapshot.end}`;
   const params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
   if(failureMode)params.set('dev','2');
-  const response=await fetch('/statistics/api/usage/by-token?'+params);
+  const response=await Scope.request('/statistics/api/usage/by-token?'+params);
   if(!response.ok){let msg='分令牌查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-  const result=await response.json();
+  const result=await response.json();Scope.guard(ticket);
   if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenSnapshot=result;
 }
 async function loadTokenOptions(){
+  const ticket=Scope.epoch;
   const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
   if(failureMode)params.set('dev','2');
-  const response=await fetch('/statistics/api/usage/tokens?'+params);
+  const response=await Scope.request('/statistics/api/usage/tokens?'+params);
   if(!response.ok){let msg='令牌列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-  const result=await response.json();
+  const result=await response.json();Scope.guard(ticket);
   if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)tokenOptions=result.rows;
 }
 async function loadGroupOptions(){
+  const ticket=Scope.epoch;
   const expected=`${snapshot.start}\n${snapshot.end}`,params=new URLSearchParams({start:snapshot.start,end:snapshot.end});
   if(failureMode)params.set('dev','2');
-  const response=await fetch('/statistics/api/usage/groups?'+params);
+  const response=await Scope.request('/statistics/api/usage/groups?'+params);
   if(!response.ok){let msg='分组列表查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-  const result=await response.json();
+  const result=await response.json();Scope.guard(ticket);
   if(snapshot&&expected===`${snapshot.start}\n${snapshot.end}`)groupOptions=result.rows;
 }
 async function loadFilteredSelection(){
+  const ticket=Scope.epoch;
   const tokenIds=[...selectedFilterValues('token')].sort(),groups=[...selectedFilterValues('group')].sort();
   if(!tokenIds.length&&!groups.length){filteredSelectionSnapshot=null;return;}
   const expected=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${tokenIds.join(',')}\n${groups.join(',')}`;
@@ -251,20 +255,22 @@ async function loadFilteredSelection(){
   tokenIds.forEach(id=>params.append('token_id',id));
   groups.forEach(group=>params.append('group',group));
   if(detailMode==='token')params.set('by_token','1');
-  const response=await fetch('/statistics/api/usage/by-selection?'+params);
+  const response=await Scope.request('/statistics/api/usage/by-selection?'+params);
   if(!response.ok){let msg='筛选查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-  const result=await response.json();
+  const result=await response.json();Scope.guard(ticket);
   const current=`${snapshot.start}\n${snapshot.end}\n${detailMode}\n${[...selectedFilterValues('token')].sort().join(',')}\n${[...selectedFilterValues('group')].sort().join(',')}`;
   if(expected===current)filteredSelectionSnapshot=result;
 }
 async function refreshSelection(){
+  const ticket=Scope.epoch;
   filteredSelectionSnapshot=null;
   if(!snapshot)return;
   $('status').className='';$('status').textContent='正在应用筛选…';
-  try{await loadFilteredSelection();renderDetails();updateReportStatus();}
-  catch(error){$('status').className='error';$('status').textContent=error.message;}
+  try{await loadFilteredSelection();Scope.guard(ticket);renderDetails();updateReportStatus();}
+  catch(error){if(ticket!==Scope.epoch)return;$('status').className='error';$('status').textContent=error.message;}
 }
 document.querySelectorAll('[data-detail-mode]').forEach(button=>button.addEventListener('click',async()=>{
+  const ticket=Scope.epoch;
   const mode=button.dataset.detailMode;
   if(mode===detailMode)return;
   setDetailMode(mode);
@@ -274,10 +280,10 @@ document.querySelectorAll('[data-detail-mode]').forEach(button=>button.addEventL
   try{
     if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
     else if(mode==='token')await loadTokenDetails();
-    renderDetails();updateReportStatus();
+    Scope.guard(ticket);renderDetails();updateReportStatus();
   }
-  catch(error){setDetailMode('summary');renderDetails();$('status').className='error';$('status').textContent=error.message;}
-  finally{document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=false);}
+  catch(error){if(ticket!==Scope.epoch)return;setDetailMode('summary');renderDetails();$('status').className='error';$('status').textContent=error.message;}
+  finally{if(ticket===Scope.epoch)document.querySelectorAll('[data-detail-mode]').forEach(item=>item.disabled=false);}
 }));
 document.querySelectorAll('[data-model-mode]').forEach(button=>button.addEventListener('click',()=>{
   const mode=button.dataset.modelMode;
@@ -332,25 +338,26 @@ tabs.forEach((tab,i)=>{
   });
 });
 async function query(event){
-  event?.preventDefault();if($('submit').disabled)return;
+  event?.preventDefault();if(!Scope.current||$('submit').disabled)return;
+  const ticket=Scope.epoch;
   $('submit').disabled=true;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=true);
   $('export').disabled=true;$('status').className='';$('status').textContent='正在查询…';
   const params=new URLSearchParams({start:$('start').value,end:$('end').value});
   if(failureMode)params.set('dev','2');
   try{
-    const response=await fetch('/statistics/api/usage?'+params);
+    const response=await Scope.request('/statistics/api/usage?'+params);
     if(!response.ok){let msg='查询失败，请重试';try{msg=(await response.json()).error||msg;}catch{}throw new Error(msg);}
-    snapshot=await response.json();tokenSnapshot=null;filteredSelectionSnapshot=null;tokenOptions=[];groupOptions=[];
+    const result=await response.json();Scope.guard(ticket);snapshot=result;tokenSnapshot=null;filteredSelectionSnapshot=null;tokenOptions=[];groupOptions=[];
     const userNames=[...new Set(snapshot.rows.map(r=>r.username))].sort();
     const displayNames=new Map(snapshot.rows.map(r=>[r.username,r.display_name]));
     populateFilter('user','全部用户',userNames,name=>displayNames.get(name)?`${name}（${displayNames.get(name)}）`:name);
     populateFilter('model','全部模型',[...new Set(snapshot.rows.map(r=>r.model_name))].sort(),name=>name);
-    await Promise.all([loadTokenOptions(),loadGroupOptions()]);populateTokenFilter();populateGroupFilter();
+    await Promise.all([loadTokenOptions(),loadGroupOptions()]);Scope.guard(ticket);populateTokenFilter();populateGroupFilter();
     if(selectedFilterValues('token').size||selectedFilterValues('group').size)await loadFilteredSelection();
     else if(detailMode==='token')await loadTokenDetails();
-    $('updated').textContent='更新于 '+snapshot.updated_at.replace('T',' ').slice(0,19)+' 北京时间';render();$('export').disabled=false;
-  }catch(error){$('status').className='error';$('status').textContent=error.message;}
-  finally{$('submit').disabled=false;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=false);}
+    Scope.guard(ticket);$('updated').textContent='更新于 '+snapshot.updated_at.replace('T',' ').slice(0,19)+' 北京时间';render();$('export').disabled=false;
+  }catch(error){if(ticket!==Scope.epoch)return;$('status').className='error';$('status').textContent=error.message;}
+  finally{if(ticket===Scope.epoch){$('submit').disabled=false;document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=false);}}
 }
 document.querySelectorAll('[data-preset]').forEach(button=>button.addEventListener('click',()=>{
   const range=presetRange(button.dataset.preset);$('start').value=range.start;$('end').value=range.end;
@@ -364,6 +371,18 @@ document.querySelectorAll('[data-column-toggle]').forEach(input=>input.addEventL
   saveVisibleColumns();applyColumnVisibility();
 }));
 $('show-all-columns').addEventListener('click',()=>{document.querySelectorAll('[data-column-toggle]:not(:disabled)').forEach(input=>input.checked=true);saveVisibleColumns();applyColumnVisibility();});
-$('export').addEventListener('click',()=>{if(snapshot)window.location.assign('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end}));});
+$('export').addEventListener('click',()=>{if(snapshot)window.location.assign(Scope.url('/statistics/api/export?'+new URLSearchParams({start:snapshot.start,end:snapshot.end})));});
 loadVisibleColumns();applyColumnVisibility();
-query();
+// Reset every ledger-dependent view before starting requests for the next ledger.
+window.addEventListener('scopechange',()=>{
+  hideMoneyTooltip();
+  snapshot=null;tokenSnapshot=null;filteredSelectionSnapshot=null;tokenOptions=[];groupOptions=[];
+  for(const key of ['user','model','token','group'])populateFilter(key,{user:'全部用户',model:'全部模型',token:'全部令牌',group:'全部分组'}[key],[],x=>x);
+  for(const id of ['rows','totals','chart'])$(id).replaceChildren();
+  document.querySelectorAll('.metrics strong').forEach(el=>el.textContent='—');
+  $('updated').textContent='北京时间';$('export').disabled=true;$('submit').disabled=false;
+  document.querySelectorAll('[data-detail-mode]').forEach(el=>el.disabled=false);
+  query();
+});
+$('export').disabled=true;
+window.addEventListener('DOMContentLoaded',()=>Scope.init(),{once:true});

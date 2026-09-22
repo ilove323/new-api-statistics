@@ -50,7 +50,7 @@ def main():
                 if not initialized:
                     balance.initialize()
                     initialized = True
-                balance.check_once()
+                balance.check_all_enabled()
             except Exception as exc:
                 log_failure(exc)
 

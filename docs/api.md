@@ -6,7 +6,7 @@
 校验 users.access_token，要求 role >= 10、status = 1、未删除。
 不接受模型调用令牌（tokens.key），不剥离或添加 sk- 前缀。
 PAT 直接使用原值，包括其中的 + 等字符。PAT 更新或账号停用后立即失效。
-返回站点整体预算，不是个人或令牌余额，不提供按 Key 的独立预算。
+默认返回“全部”账本预算；可通过 `?scope_id=<账本ID>` 查询指定渠道标签账本。不是个人或令牌余额，不提供按 Key 的独立预算。
 
 ## 实时余额
 
@@ -32,7 +32,7 @@ curl --fail-with-body   -H 'Authorization: Bearer <管理员PAT>'   -H 'Accept: 
 }
 ```
 
-- 每次请求重新汇总本月消费，历史月份读取监控库的月度渠道归档；两者均应用当前渠道排除规则。
+- 每次请求重新汇总本月消费；历史月份从逐渠道归档费用按渠道当前归属汇总。渠道改标签后历史账本金额随之变化，原始费用不变。
 - 不缓存计算结果，不写报警记录、不发送通知，不改变每日 10 点的定时检查。
 - 不受页面的时间、用户、模型和令牌筛选影响。
 - 总额度来自余额设置；累计消费为起始月份以来归档费用加本月费用。
@@ -71,3 +71,20 @@ checked_at、timezone，金额为数字，时间为带时区 ISO 8601。
 
 数据库只读账号需要 users 表（包含 access_token）的 SELECT 权限；
 无需 tokens 表权限，无需修改数据库结构或新建密钥表。
+
+## 账本选择
+
+网页内部 `GET /statistics/api/scopes` 返回账本列表（管理员网页认证）。
+`kind=all` 表示全部，`kind=tag` 的名称为 `tag_value`，`kind=ungrouped` 表示未分组。
+列表只展示 New API 当前仍存在的标签，以及“全部”“未分组”；隐藏账本的设置和历史费用不会删除。
+余额与报警接口增加可选查询参数 `scope_id`，省略时使用全部账本；无效 ID 不回退至全部。
+
+```bash
+curl --fail-with-body -H 'Authorization: Bearer <管理员PAT>' \
+  'https://example.com/statistics/api/balance?scope_id=3'
+curl --fail-with-body -H 'Authorization: Bearer <管理员PAT>' \
+  'https://example.com/statistics/api/alert?scope_id=3'
+```
+
+`/balance` 仅实时计算指定账本余额，不发送通知；`/alert` 只检查指定账本，
+关闭该账本监控后不发送余额告警。通知渠道配置仍为全局共用。

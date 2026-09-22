@@ -49,7 +49,7 @@ def main():
                     conn.execute(
                         "SELECT count(*) AS n FROM schema_migrations"
                     ).fetchone()["n"]
-                    == 4
+                    == 6
                 )
                 assert (
                     conn.execute(
@@ -129,6 +129,18 @@ def main():
                 id integer PRIMARY KEY, client_id text NOT NULL DEFAULT '',
                 secret_encrypted text NOT NULL DEFAULT '',robot_code text NOT NULL DEFAULT '',
                 open_conversation_id text NOT NULL DEFAULT '')""")
+        with v010_connect() as conn:
+            conn.execute("""CREATE TABLE balance_state (
+                id integer PRIMARY KEY, version bigint, current_month date,
+                current_amount numeric(24,6),archived_amount numeric(24,6),remaining numeric(24,6),
+                checked_at timestamptz,last_error text);
+                CREATE TABLE balance_daily_runs(day date PRIMARY KEY,checked_at timestamptz DEFAULT now());
+                CREATE TABLE balance_settings_audit(id bigserial PRIMARY KEY,username text,version bigint,
+                budget numeric(24,6),threshold numeric(24,6),start_month date,enabled boolean,
+                created_at timestamptz DEFAULT now());
+                CREATE TABLE balance_alerts(id bigserial PRIMARY KEY,remaining numeric(24,6),threshold numeric(24,6),
+                spent numeric(24,6),budget numeric(24,6),created_at timestamptz DEFAULT now(),
+                updated_at timestamptz DEFAULT now(),resolved_at timestamptz);""")
         with patch.object(balance, "connect", v010_connect):
             balance.initialize()
             balance.initialize()
@@ -137,7 +149,7 @@ def main():
                 conn.execute("SELECT count(*) AS n FROM schema_migrations").fetchone()[
                     "n"
                 ]
-                == 4
+                == 6
             )
             settings = conn.execute(
                 "SELECT * FROM notification_settings WHERE id=1"

@@ -5,7 +5,7 @@ import os
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from new_api_statistics import balance
+from new_api_statistics import balance, scopes
 from new_api_statistics.notification_channels import CHANNELS
 from new_api_statistics.notification_channels.base import DeliveryError
 from new_api_statistics.report import load_site_name
@@ -16,29 +16,44 @@ def format_alert_message(alert, site_name):
     return (
         "【余额不足报警】\n"
         f"站点：{site_name}\n"
+        f"账本：{alert.get('scope_name', '全部')}\n"
         f"总额度：¥{alert['budget']:,.2f}\n累计消费：¥{alert['spent']:,.2f}\n"
         f"剩余额度：¥{alert['remaining']:,.2f}\n报警阈值：¥{alert['threshold']:,.2f}\n"
         f"检查时间：{alert['updated_at'].astimezone(balance.TZ):%Y-%m-%d %H:%M:%S}（北京时间）"
     )
 
 
-def current_alert_message():
+def current_alert_message(scope_id=1):
     """Read the persisted active alert without running a balance check or notifying."""
     with balance.connect() as conn:
-        alert = conn.execute("""SELECT remaining,threshold,spent,budget,updated_at
-            FROM balance_alerts WHERE resolved_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT 1""").fetchone()
+        alert = conn.execute(
+            """SELECT remaining,threshold,spent,budget,updated_at
+            FROM balance_alerts WHERE resolved_at IS NULL AND scope_id=%s ORDER BY updated_at DESC,id DESC LIMIT 1""",
+            (scope_id,),
+        ).fetchone()
+        scope = scopes.get_scope(scope_id, conn)
+        if alert:
+            alert["scope_name"] = scopes.scope_name(scope)
     return format_alert_message(alert, load_site_name()) if alert else None
 
 
-def current_alert_record():
+def current_alert_record(scope_id=1):
     """Return typed API fields for the active persisted alert."""
     with balance.connect() as conn:
-        alert = conn.execute("""SELECT remaining,threshold,spent,budget,updated_at
-            FROM balance_alerts WHERE resolved_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT 1""").fetchone()
+        alert = conn.execute(
+            """SELECT remaining,threshold,spent,budget,updated_at
+            FROM balance_alerts WHERE resolved_at IS NULL AND scope_id=%s ORDER BY updated_at DESC,id DESC LIMIT 1""",
+            (scope_id,),
+        ).fetchone()
+        scope = scopes.get_scope(scope_id, conn)
+        if alert:
+            alert["scope_name"] = scopes.scope_name(scope)
     if not alert:
         return None
     return {
         "title": "余额不足报警",
+        "scope_id": scope["id"],
+        "scope_name": scopes.scope_name(scope),
         "site_name": load_site_name(),
         "budget": float(alert["budget"]),
         "spent": float(alert["spent"]),
@@ -218,7 +233,7 @@ def save(body, username):
         )
 
 
-def deliver(test=False, expected_version=None):
+def deliver(test=False, expected_version=None, scope_id=1):
     """Send after the balance transaction commits. Failures cannot roll it back."""
     with balance.connect() as conn:
         # Serialize deliveries/settings; no job or minute polling is introduced.
@@ -236,13 +251,15 @@ def deliver(test=False, expected_version=None):
             alert = None
         else:
             alert = conn.execute(
-                "SELECT * FROM balance_alerts WHERE resolved_at IS NULL"
+                "SELECT * FROM balance_alerts WHERE resolved_at IS NULL AND scope_id=%s",
+                (scope_id,),
             ).fetchone()
             enabled = conn.execute(
-                "SELECT enabled FROM balance_settings WHERE id=1"
+                "SELECT enabled FROM balance_settings WHERE scope_id=%s", (scope_id,)
             ).fetchone()
-            if not alert or not enabled["enabled"]:
+            if not alert or not enabled or not enabled["enabled"]:
                 return
+            alert["scope_name"] = scopes.scope_name(scopes.get_scope(scope_id, conn))
         error = None
         try:
             # Share the page's live SystemName lookup, rather than a deployment label.
@@ -273,8 +290,8 @@ def deliver(test=False, expected_version=None):
         raise ValueError(error)
 
 
-def notify_safely():
+def notify_safely(scope_id=1):
     try:
-        deliver()
+        deliver(scope_id=scope_id)
     except Exception as exc:
         logging.error("Notification delivery failed: %s", type(exc).__name__)

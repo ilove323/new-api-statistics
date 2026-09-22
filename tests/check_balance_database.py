@@ -38,6 +38,18 @@ def main():
     try:
         with (
             patch.object(balance, "connect", connect),
+            patch.object(
+                balance,
+                "source_channels",
+                return_value=[
+                    dict(
+                        channel_id=1,
+                        channel_name="主渠道",
+                        channel_status=1,
+                        tag_value="",
+                    )
+                ],
+            ),
             patch(
                 "new_api_statistics.notifications.load_site_name",
                 return_value="示例网关",
@@ -330,8 +342,13 @@ def main():
                     conn, first, rollover.date(), [2]
                 )
                 assert [row["amount"] for row in unfiltered] == [45, 45, 45]
-                assert [row["amount"] for row in filtered_rows] == [30, 30, 30]
+                assert [row["amount"] for row in filtered_rows] == [
+                    45,
+                    45,
+                    45,
+                ]  # new ledgers ignore legacy exclusions
                 balance.replace_excluded_channels(conn, [2], "test_admin")
+                assert balance.excluded_usage_channel_ids(conn) == [2]
 
             # A missing live ID remains filterable as a deleted inventory channel.
             renamed_live = [
@@ -359,7 +376,7 @@ def main():
                     "channel_name": "备用渠道",
                     "channel_status": None,
                     "deleted": True,
-                    "included": False,
+                    "included": True,
                 },
             ]
             with connect() as conn:
@@ -379,7 +396,7 @@ def main():
                         {
                             "channel_id": 1,
                             "channel_name": "日志旧名称",
-                            "amount": Decimal(29),
+                            "amount": Decimal(31),
                         },
                         {
                             "channel_id": 2,
@@ -417,7 +434,7 @@ def main():
                     Decimal(45)
                 ] * 3
                 assert [Decimal(row["after"]) for row in preview["rows"]] == [
-                    Decimal(44)
+                    Decimal(46)
                 ] * 3
                 result = balance.recalculate_history(
                     history_body, preview["rows"], "test_admin", rollover
@@ -433,7 +450,7 @@ def main():
                         "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
                         (first, rollover.date()),
                     ).fetchall()
-                } == {Decimal(44)}
+                } == {Decimal(46)}
                 assert {
                     row["channel_name"]
                     for row in conn.execute(
@@ -475,16 +492,20 @@ def main():
                         "SELECT amount FROM balance_months WHERE month >= %s AND month < %s",
                         (first, rollover.date()),
                     ).fetchall()
-                } == {Decimal(44)}
+                } == {Decimal(46)}
             # Simulate an older installation with multiple resolved alerts and reads.
             with connect() as conn:
-                conn.execute("DROP TABLE schema_migrations")
+                conn.execute(
+                    "DELETE FROM schema_migrations WHERE version='001_initial.sql'"
+                )
                 latest = conn.execute(
                     "INSERT INTO balance_alerts(remaining,threshold,spent,budget) "
-                    "VALUES (0,1,10,10) ON CONFLICT ((true)) "
+                    "VALUES (0,1,10,10) ON CONFLICT (scope_id) "
                     "DO UPDATE SET updated_at=now() RETURNING id"
                 ).fetchone()["id"]
-                conn.execute("DROP INDEX one_balance_alert")
+                conn.execute(
+                    "ALTER TABLE balance_alerts DROP CONSTRAINT balance_alerts_scope_id_key"
+                )
                 conn.execute(
                     "CREATE TABLE balance_alert_reads (alert_id bigint REFERENCES balance_alerts(id), "
                     "username text,read_at timestamptz DEFAULT now())"
@@ -509,6 +530,11 @@ def main():
                     ).fetchone()["name"]
                     is None
                 )
+            with connect() as conn:
+                conn.execute(
+                    "DROP INDEX IF EXISTS one_balance_alert; DROP INDEX IF EXISTS one_active_balance_alert"
+                )
+                conn.execute("ALTER TABLE balance_alerts ADD UNIQUE(scope_id)")
             # Notification secrets and deliveries stay entirely inside this test schema.
             with (
                 patch.dict(
@@ -618,7 +644,9 @@ def main():
                 assert notifications.snapshot()["app_id"] == "cli_fixture"
                 with connect() as conn:
                     # Recreate an unversioned installation for the open_id upgrade.
-                    conn.execute("DROP TABLE schema_migrations")
+                    conn.execute(
+                        "DELETE FROM schema_migrations WHERE version='001_initial.sql'"
+                    )
                     conn.execute(
                         "UPDATE notification_feishu_settings SET receive_id_type='open_id', "
                         "receive_id='ou_old' WHERE id=1"
@@ -634,6 +662,10 @@ def main():
                 )
                 assert not migrated["enabled"] and migrated["secret_configured"]
                 assert migrated["version"] == 5
+                with connect() as conn:
+                    conn.execute(
+                        "DROP INDEX IF EXISTS one_balance_alert; DROP INDEX IF EXISTS one_active_balance_alert"
+                    )
                 balance.initialize()
                 assert notifications.snapshot()["version"] == 5
                 webhook = (

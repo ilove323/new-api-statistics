@@ -16,7 +16,7 @@ contents:write。首次发布后检查 GHCR 包的可见性；公开仓库不保
 ## 发布步骤
 
 1. 更新 pyproject.toml 版本和 CHANGELOG.md，提交 PR 并通过 CI。
-2. 合并到 main 后创建对应标签，如 v0.1.1，并推送标签。
+2. 合并到 main 后创建对应标签，如 v0.1.2，并推送标签。
 3. release.yml 会复用 CI；版本与标签不一致时拒绝发布。
 4. 构建 AMD64/ARM64 镜像，发布到 ghcr.io/ilove323/new-api-statistics。
 5. 创建 GitHub Release，附带 Compose、环境变量及 Nginx 示例和校验和。
@@ -31,7 +31,7 @@ contents:write。首次发布后检查 GHCR 包的可见性；公开仓库不保
 nginx.conf.example，按部署文档配置 .env 并创建监控库。设置：
 
 ```ini
-IMAGE_TAG=0.1.1
+IMAGE_TAG=0.1.2
 ```
 
 ```bash

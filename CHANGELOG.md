@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-09-23
+
+- Add separate usage and budget ledgers for all channels, each active New API channel tag, and ungrouped channels.
+- Give each ledger independent budget settings, monthly balance, alert state, and Excel/report scope; notification configuration remains global.
+- Preserve monthly per-channel charges and aggregate historical ledger totals using each channel's current assignment. Moving a channel to another tag immediately reclassifies its archived charges without rereading logs.
+- Hide tags no longer present in the live New API channel catalog and skip their independent alert checks, while retaining their settings and history for restoration.
+- Add incremental monitoring database migrations `005` and `006`, regression tests, and updated deployment/upgrade guidance.
+
+See [release notes](docs/releases/v0.1.2.md) for upgrade requirements and behavior changes.
+
 ## 0.1.1 - 2026-09-20
 
 - Add uncached live balance JSON and independent alert endpoints using New API administrator PAT Bearer authentication.

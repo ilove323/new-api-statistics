@@ -267,7 +267,7 @@ class NotificationsTest(unittest.TestCase):
         )
         self.assertEqual(
             notifications.format_alert_message(alert, "示例网关"),
-            "【余额不足报警】\n站点：示例网关\n总额度：¥220,000.00\n"
+            "【余额不足报警】\n站点：示例网关\n账本：全部\n总额度：¥220,000.00\n"
             "累计消费：¥218,042.91\n剩余额度：¥1,957.09\n报警阈值：¥2,000.00\n"
             "检查时间：2026-09-16 23:34:46（北京时间）",
         )
@@ -326,6 +326,10 @@ class NotificationsTest(unittest.TestCase):
         with (
             patch("new_api_statistics.balance.connect", return_value=connection),
             patch(
+                "new_api_statistics.scopes.get_scope",
+                return_value={"id": 1, "kind": "all", "tag_value": ""},
+            ),
+            patch(
                 "new_api_statistics.notifications.load_site_name",
                 return_value="示例网关",
             ),
@@ -335,6 +339,8 @@ class NotificationsTest(unittest.TestCase):
             record,
             {
                 "title": "余额不足报警",
+                "scope_id": 1,
+                "scope_name": "全部",
                 "site_name": "示例网关",
                 "budget": 220000.0,
                 "spent": 218042.91,

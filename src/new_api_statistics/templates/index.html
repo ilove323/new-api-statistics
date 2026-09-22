@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='user-display.css') }}">
   <script defer src="{{ url_for('static', filename='presets.js') }}"></script>
   <script defer src="{{ url_for('static', filename='money-tooltip.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='scopes.js') }}"></script>
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='balance.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='channel.css') }}">
@@ -24,6 +25,8 @@
     </div>
   </header>
   <main>
+    <nav id="scope-tabs" class="scope-tabs" role="tablist" aria-label="上游账本"></nav>
+    <p id="scope-status" role="status">正在读取账本…</p>
     <form id="query">
       <label>开始时间（北京时间）<input id="start" name="start" type="datetime-local" step="1" value="{{ start }}" required></label>
       <label>结束时间（北京时间）<input id="end" name="end" type="datetime-local" step="1" value="{{ end }}" required></label>
@@ -102,19 +105,20 @@
     <h2 id="balance-settings-title">余额监控设置</h2>
     <div class="settings-tabs" role="tablist" aria-label="监控设置">
       <button id="settings-tab-balance" type="button" role="tab" data-settings-tab="balance" aria-selected="true" aria-controls="settings-panel-balance">余额设置</button>
-      <button id="settings-tab-notification" type="button" role="tab" data-settings-tab="notification" aria-selected="false" aria-controls="settings-panel-notification">报警渠道</button>
+      <button id="settings-tab-notification" type="button" role="tab" data-settings-tab="notification" aria-selected="false" aria-controls="settings-panel-notification">报警渠道 · 全局</button>
     </div>
     <section id="settings-panel-balance" role="tabpanel" aria-labelledby="settings-tab-balance">
       <form id="balance-form">
+        <p id="balance-scope-label"></p>
         <label class="balance-toggle"><input id="balance-enabled" type="checkbox">启用余额监控</label>
         <label>总额度（元）<input id="balance-budget" type="number" min="0" max="999999999999" step="0.01" required></label>
         <label>剩余额度报警阈值（元）<input id="balance-threshold" type="number" min="0" max="999999999999" step="0.01" required></label>
         <label>累计起始月份（北京时间）<input id="balance-start" type="month" required></label>
         <fieldset class="usage-channel-fieldset">
-          <legend>消费渠道</legend>
-          <p>所有渠道都会完整归档。取消勾选的渠道仅不计入消费统计、剩余额度和报警。</p>
-          <div class="usage-channel-actions"><button id="usage-channels-all" type="button">全选</button><button id="usage-channels-none" type="button">全不选</button></div>
-          <div id="usage-channel-options" class="usage-channel-options" aria-label="选择计入余额的消费渠道"></div>
+          <legend>当前账本所属渠道（只读）</legend>
+          <p>渠道标签决定所属账本，与用户模型明细的分组筛选无关。</p>
+          <div id="usage-channel-options" class="usage-channel-options" aria-label="当前账本所属渠道"></div>
+          <p>追溯历史计费会重建所选起始月份至上月的所有渠道、所有分组及“全部”账本归档，不仅影响当前账本。</p>
           <button id="balance-recalculate" class="danger-button" type="button">追溯历史计费</button>
         </fieldset>
         <p id="balance-settings-status" role="status"></p>
@@ -123,6 +127,7 @@
     </section>
     <section id="settings-panel-notification" role="tabpanel" aria-labelledby="settings-tab-notification" hidden>
       <form id="channel-form">
+        <p>全局共用：所有账本使用同一份通知配置。</p>
         <label class="balance-toggle"><input id="channel-enabled" type="checkbox">启用渠道通知</label>
         <label>渠道<select id="channel-type"><option value="feishu_app">飞书企业自建应用</option><option value="dingtalk_webhook">钉钉自定义 Webhook 机器人</option></select></label>
         <div id="channel-feishu-fields" class="channel-provider-fields">
@@ -143,10 +148,10 @@
   </dialog>
   <dialog id="balance-history-preview" class="balance-dialog balance-wide" aria-labelledby="balance-history-preview-title">
     <div class="dialog-heading"><h2 id="balance-history-preview-title">历史渠道计费对比</h2><button type="button" data-close="balance-history-preview">关闭</button></div>
-    <p>以下为完整渠道归档的逐月对比。确认后将覆盖累计起始月份至上月的渠道明细；消费渠道勾选不会删减原始归档。</p>
+    <p>以下仅展示当前账本的逐月金额对比，不代表全部影响范围。确认后会重建所选起始月份至上月的所有渠道、所有分组及“全部”账本归档；其他账本的历史金额和余额也可能变化。额度设置仅保存到当前账本。</p>
     <div class="balance-table"><table><thead><tr><th>月份</th><th>原归档金额（元）</th><th>重新读取金额（元）</th><th>差额（元）</th></tr></thead><tbody id="balance-history-preview-rows"></tbody></table></div>
     <p id="balance-history-preview-status" role="status"></p>
-    <div class="dialog-actions"><button type="button" data-close="balance-history-preview">取消</button><button id="balance-history-apply" class="danger-button" type="button">确认并覆盖渠道归档</button></div>
+    <div class="dialog-actions"><button type="button" data-close="balance-history-preview">取消</button><button id="balance-history-apply" class="danger-button" type="button">确认重建所有账本归档</button></div>
   </dialog>
   <dialog id="balance-alerts" class="balance-dialog balance-wide" aria-labelledby="balance-alerts-title">
     <div class="dialog-heading"><h2 id="balance-alerts-title">余额与警报</h2><button type="button" data-close="balance-alerts">关闭</button></div>
