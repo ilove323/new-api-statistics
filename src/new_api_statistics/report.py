@@ -20,6 +20,7 @@ FAILURE_SQL = """WITH errors AS MATERIALIZED (
              ->>'status_code', ''), '未知') AS status_code
     FROM logs
     WHERE type=5 AND created_at >= %(start)s AND created_at < %(end)s
+      /* scope_channels */
       AND (%(token_ids)s::bigint[] IS NULL OR token_id = ANY(%(token_ids)s::bigint[]))
       AND (%(groups)s::text[] IS NULL OR COALESCE("group", '') = ANY(%(groups)s::text[]))
 ), grouped AS (
@@ -305,6 +306,23 @@ def merge_failures(rows, failures, by_token):
     return rows
 
 
+def scoped_sql(query, channel_ids, excluded_channel_ids=None):
+    """Restrict logs by channel IDs, never by the unrelated logs.group field.
+
+    None means all channels; an empty array deliberately returns no records.
+    The caller resolves channel IDs from the balance channel-tag inventory.
+    """
+    clause = (
+        "AND (channel_id = ANY(%(channel_ids)s::bigint[]) OR "
+        "(channel_id IS NULL AND array_position(%(channel_ids)s::bigint[], NULL) IS NOT NULL))"
+        if channel_ids is not None
+        else ""
+    )
+    if excluded_channel_ids is not None:
+        clause += " AND (channel_id IS NULL OR NOT (channel_id = ANY(%(excluded_channel_ids)s::bigint[])))"
+    return query.replace("/* scope_channels */", clause)
+
+
 def load_report(
     start,
     end,
@@ -313,6 +331,8 @@ def load_report(
     token_ids=None,
     groups=None,
     include_failures=False,
+    channel_ids=None,
+    excluded_channel_ids=None,
 ):
     """Load either user-model totals or user-token-model totals read-only."""
     first, last = period(start, end)
@@ -323,24 +343,28 @@ def load_report(
     ) as conn:
         conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
         rows = conn.execute(
-            SQL,
+            scoped_sql(SQL, channel_ids, excluded_channel_ids),
             {
                 "start": first,
                 "end": last,
                 "by_token": by_token,
                 "token_ids": token_ids,
                 "groups": groups,
+                "channel_ids": channel_ids,
+                "excluded_channel_ids": excluded_channel_ids,
             },
         ).fetchall()
         if include_failures:
             failures = conn.execute(
-                FAILURE_SQL,
+                scoped_sql(FAILURE_SQL, channel_ids, excluded_channel_ids),
                 {
                     "start": first,
                     "end": last,
                     "by_token": by_token,
                     "token_ids": token_ids,
                     "groups": groups,
+                    "channel_ids": channel_ids,
+                    "excluded_channel_ids": excluded_channel_ids,
                 },
             ).fetchall()
             merge_failures(rows, failures, by_token)
@@ -370,7 +394,9 @@ def load_report(
     return decorate(rows, options)
 
 
-def load_token_options(start, end, *, include_failures=False):
+def load_token_options(
+    start, end, *, include_failures=False, channel_ids=None, excluded_channel_ids=None
+):
     """Return the latest name of each token used in the selected interval."""
     first, last = period(start, end)
     with psycopg.connect(
@@ -383,12 +409,26 @@ def load_token_options(start, end, *, include_failures=False):
                       COALESCE(NULLIF(btrim(token_name), ''), '未知令牌') AS token_name
                FROM logs
                WHERE type = ANY(%s) AND created_at >= %s AND created_at < %s
+                 AND (%s::bigint[] IS NULL OR channel_id = ANY(%s::bigint[])
+                      OR (channel_id IS NULL AND array_position(%s::bigint[], NULL) IS NOT NULL))
+                 AND (%s::bigint[] IS NULL OR channel_id IS NULL OR NOT (channel_id = ANY(%s::bigint[])))
                ORDER BY token_id, created_at DESC, id DESC""",
-            ([2, 5] if include_failures else [2], first, last),
+            (
+                [2, 5] if include_failures else [2],
+                first,
+                last,
+                channel_ids,
+                channel_ids,
+                channel_ids,
+                excluded_channel_ids,
+                excluded_channel_ids,
+            ),
         ).fetchall()
 
 
-def load_group_options(start, end, *, include_failures=False):
+def load_group_options(
+    start, end, *, include_failures=False, channel_ids=None, excluded_channel_ids=None
+):
     """Return groups used in the selected interval."""
     first, last = period(start, end)
     with psycopg.connect(
@@ -400,8 +440,20 @@ def load_group_options(start, end, *, include_failures=False):
             """SELECT DISTINCT COALESCE("group", '') AS group_name
                FROM logs
                WHERE type = ANY(%s) AND created_at >= %s AND created_at < %s
+                 AND (%s::bigint[] IS NULL OR channel_id = ANY(%s::bigint[])
+                      OR (channel_id IS NULL AND array_position(%s::bigint[], NULL) IS NOT NULL))
+                 AND (%s::bigint[] IS NULL OR channel_id IS NULL OR NOT (channel_id = ANY(%s::bigint[])))
                ORDER BY group_name""",
-            ([2, 5] if include_failures else [2], first, last),
+            (
+                [2, 5] if include_failures else [2],
+                first,
+                last,
+                channel_ids,
+                channel_ids,
+                channel_ids,
+                excluded_channel_ids,
+                excluded_channel_ids,
+            ),
         ).fetchall()
 
 

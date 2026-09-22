@@ -37,14 +37,14 @@ New API Statistics 是配合 [QuantumNous/new-api](https://github.com/QuantumNou
 
 | 功能 | 说明 |
 | --- | --- |
-| 用量分析 | 查看用户、模型的输入、输出、缓存读取与缓存写入 Token；明细表支持用户、模型多选筛选及列选择 |
+| 用量分析 | 查看用户、模型的输入、输出、缓存读取与缓存写入 Token；明细表支持用户、模型、令牌、分组多选筛选及列选择 |
 | 消费排名 | 模型消费、用户 Token 用量、用户消费标签页切换 |
 | 时间筛选 | 精确到秒，支持上个月、近 30 天、近 7 天和近 1 天 |
 | Excel 导出 | 多工作表汇总，数字单元格与 SUM 合计公式 |
 | 管理员认证 | 复用 New API 管理员账号，读取原有权限和密码哈希 |
-| 余额监控 | 按月、渠道完整归档费用，支持历史追溯覆盖，并动态筛选计入预算和报警的渠道 |
+| 余额监控 | “全部”、当前渠道标签和“未分组”独立设额度与报警；逐渠道归档，历史按当前归属汇总 |
 | 定时检查 | 每天北京时间 10:00 检查，也可通过铃铛或 API 手动触发 |
-| 通知渠道 | 支持飞书企业自建应用与钉钉自定义 Webhook 机器人 |
+| 通知渠道 | 所有账本共用飞书企业自建应用或钉钉 Webhook 通知配置 |
 | 报警 API | 实时余额与报警检查，使用 New API 管理员 PAT Bearer 认证 |
 
 Token 缓存语义取决于上游日志。部分报表数值涉及数学折算，
@@ -101,8 +101,8 @@ https://<你的域名>/statistics/
 使用 **New API 管理员账号密码**登录。
 
 没有 Nginx 时，可按[直接端口访问说明](docs/deployment.md#无-nginx-直接访问)配置宿主机端口。
-镜像部署可下载 [v0.1.1 Release](https://github.com/ilove323/new-api-statistics/releases/tag/v0.1.1)
-中的配置文件，设置 `IMAGE_TAG=0.1.1`，按[发版说明](docs/releasing.md)启动。
+镜像部署可下载 [v0.1.2 Release](https://github.com/ilove323/new-api-statistics/releases/tag/v0.1.2)
+中的配置文件，设置 `IMAGE_TAG=0.1.2`，按[发版说明](docs/releasing.md)启动。
 
 ## 文档
 

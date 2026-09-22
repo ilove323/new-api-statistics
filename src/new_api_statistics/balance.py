@@ -37,7 +37,9 @@ def initialize():
             for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
         }
         # The lock and transaction make upgrades atomic across web/worker processes.
-        for migration in sorted(Path(__file__).with_name("migrations").glob("*.sql")):
+        for migration in sorted(
+            Path(__file__).with_name("migrations").glob("[0-9]*.sql")
+        ):
             if migration.name not in applied:
                 conn.execute(migration.read_text())
                 conn.execute(
@@ -71,36 +73,66 @@ def source_channels():
     ) as conn:
         return conn.execute(
             """SELECT id AS channel_id,
-                      COALESCE(NULLIF(btrim(name), ''), '渠道 #' || id::text) AS channel_name,
-                      status AS channel_status
-               FROM channels ORDER BY id"""
+                COALESCE(NULLIF(btrim(name),''),'渠道 #' || id::text) AS channel_name,
+                status AS channel_status,COALESCE(NULLIF(btrim(tag),''),'') AS tag_value,
+                false AS is_deleted FROM channels
+            UNION ALL
+            SELECT DISTINCT l.channel_id,'渠道 #' || l.channel_id::text,NULL::bigint,''::text,true
+            FROM logs l LEFT JOIN channels c ON c.id=l.channel_id
+            WHERE c.id IS NULL AND l.channel_id IS NOT NULL
+            ORDER BY channel_id"""
         ).fetchall()
 
 
 def sync_channel_inventory(conn, live_channels):
     """Use the live name for a channel ID across inventory and archived details."""
     for row in live_channels:
+        if row.get("is_deleted"):
+            conn.execute(
+                """INSERT INTO balance_channel_inventory(channel_id,channel_name)
+                VALUES (%s,%s) ON CONFLICT DO NOTHING""",
+                (row["channel_id"], row["channel_name"]),
+            )
+            continue
+        tag = (row.get("tag_value") or "").strip() if row["channel_id"] else ""
+        if tag:
+            scope_id = conn.execute(
+                """INSERT INTO balance_scopes(kind,tag_value)
+                VALUES ('tag',%s) ON CONFLICT(kind,tag_value) DO UPDATE SET updated_at=now()
+                RETURNING id""",
+                (tag,),
+            ).fetchone()["id"]
+        else:
+            scope_id = 2
         conn.execute(
-            """INSERT INTO balance_channel_inventory(channel_id,channel_name)
-               VALUES (%s,%s) ON CONFLICT(channel_id) DO UPDATE SET
-               channel_name=EXCLUDED.channel_name,last_seen_at=now()""",
-            (row["channel_id"], row["channel_name"]),
+            """INSERT INTO balance_channel_inventory(channel_id,channel_name,scope_id)
+            VALUES (%s,%s,%s) ON CONFLICT(channel_id) DO UPDATE SET
+            channel_name=EXCLUDED.channel_name,scope_id=EXCLUDED.scope_id,last_seen_at=now()""",
+            (row["channel_id"], row["channel_name"], scope_id),
         )
         conn.execute(
             "UPDATE balance_month_channels SET channel_name=%s WHERE channel_id=%s",
             (row["channel_name"], row["channel_id"]),
         )
+    from new_api_statistics.scopes import ensure_settings
+
+    ensure_settings(conn)
 
 
-def usage_channels_snapshot():
+def usage_channels_snapshot(scope_id=1):
     """Refresh the channel inventory and mark channels absent from New API as deleted."""
-    live_channels = source_channels()
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
+    scope_id = scopes.get_scope(scope_id)["id"]
+    live_channels = [r for r in source_channels() if not r.get("is_deleted")]
     live_by_id = {row["channel_id"]: row for row in live_channels}
     with connect() as conn:
         sync_channel_inventory(conn, live_channels)
-        excluded = set(excluded_usage_channel_ids(conn))
+        excluded = set()
         inventory = conn.execute(
-            "SELECT channel_id,channel_name FROM balance_channel_inventory ORDER BY channel_id"
+            "SELECT channel_id,channel_name,scope_id FROM balance_channel_inventory WHERE (%s=1 OR scope_id=%s) ORDER BY channel_id",
+            (scope_id, scope_id),
         ).fetchall()
     result = []
     for stored in inventory:
@@ -210,13 +242,13 @@ def replace_excluded_channels(conn, channel_ids, username):
         )
 
 
-def update_settings(conn, values, username):
+def update_settings(conn, values, username, scope_id=1):
     row = conn.execute(
         """UPDATE balance_settings SET budget=%(budget)s,
         threshold=%(threshold)s,start_month=%(start_month)s,enabled=%(enabled)s,
         version=version+1,updated_at=now(),updated_by=%(username)s
-        WHERE id=1 AND version=%(version)s RETURNING *""",
-        dict(values, username=username),
+        WHERE scope_id=%(scope_id)s AND version=%(version)s RETURNING *""",
+        dict(values, username=username, scope_id=scope_id),
     ).fetchone()
     if not row:
         raise SettingsConflict()
@@ -225,8 +257,8 @@ def update_settings(conn, values, username):
 
 def audit_settings(conn, row, username):
     conn.execute(
-        """INSERT INTO balance_settings_audit(username,version,budget,threshold,start_month,enabled)
-        VALUES (%s,%s,%s,%s,%s,%s)""",
+        """INSERT INTO balance_settings_audit(username,version,budget,threshold,start_month,enabled,scope_id)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)""",
         (
             username,
             row["version"],
@@ -234,66 +266,101 @@ def audit_settings(conn, row, username):
             row["threshold"],
             row["start_month"],
             row["enabled"],
+            row["scope_id"],
         ),
     )
 
 
-def save_settings(body, username):
+def save_settings(body, username, scope_id=1):
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
+    scope_id = scopes.get_scope(scope_id)["id"]
     values = validate_settings(body)
-    excluded_channel_ids = values.pop("excluded_channel_ids")
+    values.pop("excluded_channel_ids")
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(90216321)")
-        row = update_settings(conn, values, username)
-        replace_excluded_channels(conn, excluded_channel_ids, username)
+        row = update_settings(conn, values, username, scope_id)
         audit_settings(conn, row, username)
         if not row["enabled"]:
-            conn.execute(
-                "UPDATE balance_alerts SET resolved_at=now(),updated_at=now() WHERE resolved_at IS NULL"
-            )
+            conn.execute("DELETE FROM balance_alerts WHERE scope_id=%s", (scope_id,))
         archive_missing(conn, row["start_month"], datetime.now(TZ))
     return row
 
 
-def history_calculation(conn, body, now):
+def history_calculation(conn, body, now, scope_id=1):
     """Read complete per-channel history and build a protected monthly comparison."""
     values = validate_settings(body)
     excluded_channel_ids = values.pop("excluded_channel_ids")
-    if excluded_channel_ids is None:
-        raise ValueError("请重新打开设置并刷新消费渠道后再追溯。")
     current = now.date().replace(day=1)
     months = month_list(values["start_month"], current)
     if not months:
         raise ValueError("当前起始月份没有可追溯的历史归档。")
     settings = conn.execute(
-        "SELECT version FROM balance_settings WHERE id=1"
+        "SELECT version FROM balance_settings WHERE scope_id=%s", (scope_id,)
     ).fetchone()
     if not settings or settings["version"] != values["version"]:
         raise SettingsConflict()
     archived = {
-        row["month"]: row["amount"]
-        for row in conn.execute(
-            "SELECT month,amount FROM balance_months WHERE month >= %s AND month < %s",
-            (values["start_month"], current),
-        ).fetchall()
+        r["month"]: r["amount"]
+        for r in archived_month_rows(
+            conn, values["start_month"], current, scope_id=scope_id
+        )
     }
     details = source_channel_amounts(months, now)
-    if not any(details.values()):
-        raise ArchiveDataMissing()
-    amounts = {
-        month: sum((row["amount"] for row in details.get(month, [])), Decimal(0))
-        for month in months
+    baseline = {
+        r["month"]: r["amount"]
+        for r in conn.execute(
+            "SELECT month,amount FROM balance_months WHERE month=ANY(%s::date[])",
+            (months,),
+        ).fetchall()
     }
+    raw = {
+        m: sum((r["amount"] for r in details.get(m, [])), Decimal(0)) for m in months
+    }
+    if any(m in baseline and raw[m] < baseline[m] for m in months) or not any(
+        details.values()
+    ):
+        raise ArchiveDataMissing()
+    mapping = {
+        r["channel_id"]: r["scope_id"]
+        for r in conn.execute(
+            "SELECT channel_id,scope_id FROM balance_channel_inventory"
+        ).fetchall()
+    }
+    amounts = {
+        m: sum(
+            (
+                r["amount"]
+                for r in details.get(m, [])
+                if scope_id == 1 or mapping.get(r["channel_id"], 2) == scope_id
+            ),
+            Decimal(0),
+        )
+        for m in months
+    }
+
     return values, excluded_channel_ids, months, archived, details, amounts
 
 
-def history_preview(body, now=None):
+def history_preview(body, now=None, scope_id=1):
     """Return the complete monthly comparison that an administrator must confirm."""
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
+    scope_id = scopes.get_scope(scope_id)["id"]
     now = (now or datetime.now(TZ)).astimezone(TZ)
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(90216321)")
-        values, _, months, archived, _, amounts = history_calculation(conn, body, now)
+        values, _, months, archived, _, amounts = history_calculation(
+            conn, body, now, scope_id
+        )
     return {
         "version": values["version"],
+        "scope_id": scope_id,
+        "rebuild_scope": "all",
+        "affects_all_scopes": True,
+        "warning": "将重建这些月份所有账本的归档，不仅当前账本。",
         "rows": [
             {
                 "month": month.strftime("%Y-%m"),
@@ -329,48 +396,46 @@ def validate_history_preview(rows):
     return result
 
 
-def recalculate_history(body, preview_rows, username, now=None):
+def recalculate_history(body, preview_rows, username, now=None, scope_id=1):
     """Replace history with complete per-channel data after exact monthly review."""
     expected = validate_history_preview(preview_rows)
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
+    scope_id = scopes.get_scope(scope_id)["id"]
     now = (now or datetime.now(TZ)).astimezone(TZ)
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(90216321)")
         values, excluded, months, archived, details, amounts = history_calculation(
-            conn, body, now
+            conn, body, now, scope_id
         )
         actual = {
             month: (archived.get(month, Decimal(0)), amounts[month]) for month in months
         }
         if expected != actual:
             raise HistoryPreviewChanged()
-        row = update_settings(conn, values, username)
-        replace_excluded_channels(conn, excluded, username)
+        row = update_settings(conn, values, username, scope_id)
         audit_settings(conn, row, username)
         write_channel_archives(conn, months, details)
         sync_channel_inventory(conn, source_channels())
         if not row["enabled"]:
-            conn.execute("DELETE FROM balance_alerts")
+            conn.execute("DELETE FROM balance_alerts WHERE scope_id=%s", (scope_id,))
     return {"version": row["version"], "months": len(months)}
 
 
-def archived_month_rows(conn, first, end, excluded_channel_ids):
-    """Apply current exclusions to immutable per-channel monthly archives."""
+def archived_month_rows(conn, first, end, excluded_channel_ids=None, scope_id=1):
+    """Aggregate retained monthly channel fees using current channel membership."""
     return conn.execute(
-        """SELECT totals.month,totals.amount,totals.archived_at FROM (
-            SELECT bm.month,
-              CASE WHEN marker.month IS NULL THEN bm.amount
-                   ELSE COALESCE(SUM(detail.amount) FILTER (
-                     WHERE detail.channel_id IS NULL
-                        OR NOT (detail.channel_id = ANY(%s::bigint[]))),0)
-              END AS amount,
-              COALESCE(marker.archived_at,bm.archived_at) AS archived_at
-            FROM balance_months bm
-            LEFT JOIN balance_channel_archive_months marker ON marker.month=bm.month
-            LEFT JOIN balance_month_channels detail ON detail.month=bm.month
-            WHERE bm.month >= %s AND bm.month < %s
-            GROUP BY bm.month,bm.amount,bm.archived_at,marker.month,marker.archived_at
-        ) totals ORDER BY totals.month DESC""",
-        (excluded_channel_ids, first, end),
+        """SELECT m.month,
+        COALESCE(SUM(CASE WHEN %s=1 OR COALESCE(i.scope_id,2)=%s
+                    THEN d.amount ELSE 0 END),0) AS amount,
+        MAX(d.archived_at) AS archived_at
+        FROM balance_channel_archive_months m
+        LEFT JOIN balance_month_channels d ON d.month=m.month
+        LEFT JOIN balance_channel_inventory i ON i.channel_id=d.channel_id
+        WHERE m.month >= %s AND m.month < %s
+        GROUP BY m.month ORDER BY m.month DESC""",
+        (scope_id, scope_id, first, end),
     ).fetchall()
 
 
@@ -417,6 +482,7 @@ def write_channel_archives(conn, months, details):
     """Replace selected closed months with complete, unfiltered channel archives."""
     if not months:
         return
+    sync_channel_inventory(conn, source_channels())
     conn.execute(
         "DELETE FROM balance_channel_archive_months WHERE month = ANY(%s::date[])",
         (months,),
@@ -435,13 +501,18 @@ def write_channel_archives(conn, months, details):
         for detail in details.get(month, []):
             conn.execute(
                 """INSERT INTO balance_month_channels
-                   (month,channel_id,channel_name,amount)
-                   VALUES (%s,%s,%s,%s)""",
+                   (month,channel_id,channel_name,amount,scope_id,tag_value)
+                   VALUES (%s,%s,%s,%s,
+                     COALESCE((SELECT scope_id FROM balance_channel_inventory WHERE channel_id=%s),2),
+                     COALESCE((SELECT s.tag_value FROM balance_channel_inventory i
+                       JOIN balance_scopes s ON s.id=i.scope_id WHERE i.channel_id=%s),''))""",
                 (
                     month,
                     detail["channel_id"],
                     detail["channel_name"],
                     detail["amount"],
+                    detail["channel_id"],
+                    detail["channel_id"],
                 ),
             )
             if detail["channel_id"] is not None:
@@ -456,6 +527,10 @@ def write_channel_archives(conn, months, details):
            WHERE detail.channel_id=inventory.channel_id
              AND detail.channel_name<>inventory.channel_name"""
     )
+
+    from new_api_statistics.scopes import rebuild_month_scopes
+
+    rebuild_month_scopes(conn, months)
 
 
 def rebuild_channel_archives(now=None):
@@ -587,8 +662,36 @@ def source_amounts(months, now, excluded_channel_ids=None):
     }
 
 
-def check_once(now=None, source=None, daily=True):
-    """Idempotent rollover and catch-up, serialized across worker replicas."""
+def current_scope_amount(conn, scope_id, current, now):
+    """Aggregate source rows once, using retained channel tags for deleted channels."""
+    if scope_id == 1:
+        return source_amounts([current], now)[current]
+    details = source_channel_amounts([current], now)[current]
+    mapping = {
+        r["channel_id"]: r["scope_id"]
+        for r in conn.execute(
+            "SELECT channel_id,scope_id FROM balance_channel_inventory"
+        ).fetchall()
+    }
+    return sum(
+        (
+            r["amount"]
+            for r in details
+            if scope_id == 1 or mapping.get(r["channel_id"], 2) == scope_id
+        ),
+        Decimal(0),
+    )
+
+
+def check_once(now=None, source=None, daily=True, scope_id=1):
+    """Check exactly one ledger; commit alert before global-channel delivery."""
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
+    scope = scopes.get_scope(scope_id)
+    if not scope["is_visible"]:
+        return None
+    scope_id = scope["id"]
     now = (now or datetime.now(TZ)).astimezone(TZ)
     current = now.date().replace(day=1)
     with connect() as conn:
@@ -598,67 +701,81 @@ def check_once(now=None, source=None, daily=True):
             if not daily:
                 raise CheckBusy()
             return
-        settings = conn.execute("SELECT * FROM balance_settings WHERE id=1").fetchone()
+        settings = conn.execute(
+            "SELECT * FROM balance_settings WHERE scope_id=%s", (scope_id,)
+        ).fetchone()
         if not settings or not settings["enabled"]:
             return
         if (
             daily
             and conn.execute(
-                "SELECT 1 FROM balance_daily_runs WHERE day=%s", (now.date(),)
+                "SELECT 1 FROM balance_daily_runs WHERE scope_id=%s AND day=%s",
+                (scope_id, now.date()),
             ).fetchone()
         ):
             return
-        archive_table = (
-            "balance_months" if source is not None else "balance_channel_archive_months"
-        )
-        archived = {
-            row["month"]
-            for row in conn.execute(f"SELECT month FROM {archive_table}").fetchall()
-        }
-        missing = [
-            m for m in month_list(settings["start_month"], current) if m not in archived
-        ]
-        excluded = excluded_usage_channel_ids(conn)
-        if source is not None:
+        if source:
+            archived = {
+                r["month"]
+                for r in conn.execute(
+                    "SELECT month FROM balance_channel_archive_months"
+                ).fetchall()
+            }
+            missing = [
+                m
+                for m in month_list(settings["start_month"], current)
+                if m not in archived
+            ]
             amounts = source(missing + [current], now)
+            write_channel_archives(
+                conn,
+                missing,
+                {
+                    m: [
+                        dict(
+                            channel_id=None,
+                            channel_name="未标记渠道",
+                            amount=amounts[m],
+                        )
+                    ]
+                    for m in missing
+                },
+            )
+            amount = amounts[current]
         else:
             archive_missing(conn, settings["start_month"], now)
-            amounts = source_amounts([current], now, excluded)
-        # Do not publish a result calculated against settings changed mid-query.
+            amount = current_scope_amount(conn, scope_id, current, now)
         latest = conn.execute(
-            "SELECT version FROM balance_settings WHERE id=1 FOR UPDATE"
+            "SELECT version FROM balance_settings WHERE scope_id=%s FOR UPDATE",
+            (scope_id,),
         ).fetchone()
         if latest["version"] != settings["version"]:
             if not daily:
                 raise CheckBusy()
             return
-        if source is not None:
-            for month in missing:
-                conn.execute(
-                    "INSERT INTO balance_months(month,amount) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-                    (month, amounts[month]),
-                )
         historical = sum(
             (
-                month["amount"]
-                for month in archived_month_rows(
-                    conn, settings["start_month"], current, excluded
+                r["amount"]
+                for r in archived_month_rows(
+                    conn, settings["start_month"], current, scope_id=scope_id
                 )
             ),
             Decimal(0),
         )
-        spent = historical + amounts[current]
+        spent = historical + amount
         remaining = settings["budget"] - spent
         conn.execute(
-            """INSERT INTO balance_state(id,version,current_month,current_amount,archived_amount,
-            remaining,checked_at,last_error) VALUES (1,%s,%s,%s,%s,%s,%s,NULL)
-            ON CONFLICT(id) DO UPDATE SET version=EXCLUDED.version,current_month=EXCLUDED.current_month,
+            """INSERT INTO balance_state(id,scope_id,version,current_month,current_amount,
+            archived_amount,remaining,checked_at,last_error) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NULL)
+            ON CONFLICT(scope_id) DO UPDATE SET version=EXCLUDED.version,current_month=EXCLUDED.current_month,
             current_amount=EXCLUDED.current_amount,archived_amount=EXCLUDED.archived_amount,
             remaining=EXCLUDED.remaining,checked_at=EXCLUDED.checked_at,last_error=NULL""",
             (
+                scope_id,
+                scope_id,
                 settings["version"],
                 current,
-                amounts[current],
+                amount,
                 historical,
                 remaining,
                 now,
@@ -666,79 +783,109 @@ def check_once(now=None, source=None, daily=True):
         )
         if remaining < settings["threshold"]:
             conn.execute(
-                """INSERT INTO balance_alerts(remaining,threshold,spent,budget,updated_at)
-                VALUES (%s,%s,%s,%s,%s) ON CONFLICT ((true))
-                DO UPDATE SET remaining=EXCLUDED.remaining,threshold=EXCLUDED.threshold,
-                spent=EXCLUDED.spent,budget=EXCLUDED.budget,updated_at=EXCLUDED.updated_at,resolved_at=NULL""",
-                (remaining, settings["threshold"], spent, settings["budget"], now),
+                """INSERT INTO balance_alerts(scope_id,remaining,threshold,spent,budget,updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(scope_id) DO UPDATE SET
+                remaining=EXCLUDED.remaining,threshold=EXCLUDED.threshold,spent=EXCLUDED.spent,
+                budget=EXCLUDED.budget,updated_at=EXCLUDED.updated_at,resolved_at=NULL""",
+                (
+                    scope_id,
+                    remaining,
+                    settings["threshold"],
+                    spent,
+                    settings["budget"],
+                    now,
+                ),
             )
         else:
-            conn.execute("DELETE FROM balance_alerts")
+            conn.execute("DELETE FROM balance_alerts WHERE scope_id=%s", (scope_id,))
         if daily:
             conn.execute(
-                "INSERT INTO balance_daily_runs(day) VALUES (%s) ON CONFLICT DO NOTHING",
-                (now.date(),),
+                "INSERT INTO balance_daily_runs(scope_id,day) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (scope_id, now.date()),
             )
-    # Commit the latest alert before contacting an external notification channel.
     from new_api_statistics.notifications import notify_safely
 
-    notify_safely()
+    notify_safely(scope_id=scope_id)
     return True
 
 
-def record_failure():
-    # Never expose database credentials or SQL diagnostics to the browser.
+def check_all_enabled(now=None):
+    """Daily worker: one failed ledger must not prevent the remaining checks."""
+    from new_api_statistics import scopes
+    import logging
+
+    results = {}
+    for scope in scopes.list_scopes(refresh=True):
+        if scope["enabled"]:
+            try:
+                results[scope["id"]] = check_once(now=now, scope_id=scope["id"])
+            except Exception as exc:
+                logging.error(
+                    "Balance scope %s failed: %s", scope["id"], type(exc).__name__
+                )
+                try:
+                    record_failure(scope_id=scope["id"])
+                except Exception:
+                    logging.error("Unable to persist scope failure")
+                results[scope["id"]] = False
+    return results
+
+
+def record_failure(scope_id=1):
     with connect() as conn:
         conn.execute(
-            "INSERT INTO balance_state(id,last_error) VALUES (1,'监控查询失败，请检查服务日志。') "
-            "ON CONFLICT(id) DO UPDATE SET last_error=EXCLUDED.last_error"
+            """INSERT INTO balance_state(id,scope_id,last_error)
+            VALUES (%s,%s,'监控查询失败，请检查服务日志。')
+            ON CONFLICT(scope_id) DO UPDATE SET last_error=EXCLUDED.last_error""",
+            (scope_id, scope_id),
         )
 
 
-def snapshot(live=False):
+def snapshot(live=False, scope_id=1):
     if not configured():
         return dict(configured=False)
+    from new_api_statistics import scopes
+
+    scopes.refresh_scopes()
     now = datetime.now(TZ)
     current = now.date().replace(day=1)
     with connect() as conn:
-        conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
-        settings = conn.execute("SELECT * FROM balance_settings WHERE id=1").fetchone()
-        if not settings:
-            raise ValueError("余额监控正在初始化，请稍后重试。")
-        state = conn.execute("SELECT * FROM balance_state WHERE id=1").fetchone()
-        excluded = excluded_usage_channel_ids(conn)
-        months = archived_month_rows(conn, settings["start_month"], current, excluded)
-        alerts = conn.execute(
-            "SELECT * FROM balance_alerts ORDER BY updated_at DESC LIMIT 1"
-        ).fetchall()
-    if live:
-        archived = {m["month"] for m in months}
-        if any(m not in archived for m in month_list(settings["start_month"], current)):
-            return dict(
-                configured=True,
-                settings=settings,
-                state=state,
-                months=months,
-                alerts=alerts,
-                valid=False,
-                stale=True,
-            )
-        amount = source_amounts([current], now, excluded)[current]
-        historical = sum((m["amount"] for m in months), Decimal(0))
-        state = dict(
-            version=settings["version"],
-            current_month=current,
-            current_amount=amount,
-            archived_amount=historical,
-            remaining=settings["budget"] - historical - amount,
-            checked_at=now,
-            last_error=None,
+        scope = scopes.get_scope(scope_id, conn)
+        scope_id = scope["id"]
+        settings = conn.execute(
+            "SELECT * FROM balance_settings WHERE scope_id=%s", (scope_id,)
+        ).fetchone()
+        state = conn.execute(
+            "SELECT * FROM balance_state WHERE scope_id=%s", (scope_id,)
+        ).fetchone()
+        months = archived_month_rows(
+            conn, settings["start_month"], current, scope_id=scope_id
         )
+        alerts = conn.execute(
+            "SELECT * FROM balance_alerts WHERE scope_id=%s", (scope_id,)
+        ).fetchall()
+        if live:
+            conn.execute("SELECT pg_advisory_xact_lock(90216321)")
+            archive_missing(conn, settings["start_month"], now)
+            months = archived_month_rows(
+                conn, settings["start_month"], current, scope_id=scope_id
+            )
+            amount = current_scope_amount(conn, scope_id, current, now)
+            historical = sum((m["amount"] for m in months), Decimal(0))
+            state = dict(
+                version=settings["version"],
+                current_month=current,
+                current_amount=amount,
+                archived_amount=historical,
+                remaining=settings["budget"] - historical - amount,
+                checked_at=now,
+                last_error=None,
+            )
     valid = bool(
         state
         and state["checked_at"]
         and state["version"] == settings["version"]
-        and state["current_month"] == now.date().replace(day=1)
+        and state["current_month"] == current
     )
     stale = (
         not valid
@@ -747,6 +894,7 @@ def snapshot(live=False):
     )
     return dict(
         configured=True,
+        scope=scope,
         settings=settings,
         state=state,
         months=months,

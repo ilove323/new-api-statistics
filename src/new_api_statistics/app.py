@@ -4,13 +4,15 @@
 """Single-container statistics page and authenticated read-only API."""
 
 import os
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, g, jsonify, render_template, request, send_file
 from flask.json.provider import DefaultJSONProvider
 import psycopg
 from new_api_statistics import balance
+from new_api_statistics import scopes as scope_backend
 from new_api_statistics import notifications
 
 from new_api_statistics.report import (
@@ -70,6 +72,19 @@ def authenticate():
 
 @app.after_request
 def headers(response):
+    if (
+        "scope_id" in request.args
+        and response.is_json
+        and response.status_code < 400
+        and (
+            request.path.startswith("/statistics/api/balance/")
+            and "/channel" not in request.path
+        )
+    ):
+        body = response.get_json()
+        if isinstance(body, dict):
+            body["scope"] = scope_context()
+            response.set_data(app.json.dumps(body))
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = (
@@ -97,13 +112,79 @@ def index():
     )
 
 
+def scope_context():
+    """Resolve a ledger once per request; absent scope preserves all-site behavior.
+
+    Backend contract: scopes.get_scope(id), list_scopes(), channel_filter(id).
+    A scoped request must fail closed if its scope does not exist.
+    """
+    if "usage_scope" not in g:
+        raw = request.args.get("scope_id")
+        if raw is None or raw == "1":
+            g.usage_scope = {"id": 1, "kind": "all", "tag_value": ""}
+        else:
+            try:
+                scope_id = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError("请选择有效的统计分组。") from None
+            if scope_id <= 0:
+                raise ValueError("请选择有效的统计分组。")
+            scope = scope_backend.get_scope(scope_id)
+            if not scope:
+                raise ValueError("统计分组不存在。")
+            g.usage_scope = {key: scope[key] for key in ("id", "kind", "tag_value")}
+    return g.usage_scope
+
+
+def scope_kwargs():
+    """Leave legacy default calls unchanged; pass explicit ledger IDs otherwise."""
+    scope = scope_context()
+    return {"scope_id": scope["id"]} if "scope_id" in request.args else {}
+
+
+def report_scope_kwargs():
+    scope = scope_context()
+    if scope["kind"] == "all":
+        return {}
+    if "scope_channels" not in g:
+        g.scope_channels = scope_backend.channel_filter(scope["id"])
+        if g.scope_channels is None:
+            raise ValueError("统计分组的渠道范围不可用。")
+    if scope["kind"] == "ungrouped":
+        # Unknown historical/deleted IDs must not disappear on a fresh install.
+        # channel_filter above refreshes live tags while retaining deleted inventory.
+        if "excluded_scope_channels" not in g:
+            with balance.connect() as conn:
+                g.excluded_scope_channels = [
+                    row["channel_id"]
+                    for row in conn.execute(
+                        "SELECT channel_id FROM balance_channel_inventory WHERE scope_id <> %s",
+                        (scope["id"],),
+                    ).fetchall()
+                ]
+        return {"excluded_channel_ids": g.excluded_scope_channels}
+    return {"channel_ids": g.scope_channels}
+
+
+@app.get("/statistics/api/scopes")
+def scopes():
+    if not balance.configured():
+        return jsonify(rows=[{"id": 1, "kind": "all", "tag_value": ""}])
+    return jsonify(
+        rows=[
+            {key: row[key] for key in ("id", "kind", "tag_value")}
+            for row in scope_backend.list_scopes()
+        ]
+    )
+
+
 def failure_diagnostics():
     return request.args.get("dev") == "2"
 
 
 def selected(*, by_token=False, include_failures=False):
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    kwargs = {"by_token": by_token}
+    kwargs = {"by_token": by_token, **report_scope_kwargs()}
     if include_failures:
         kwargs["include_failures"] = True
     rows = load_report(start, end, **kwargs)
@@ -120,6 +201,7 @@ def selected(*, by_token=False, include_failures=False):
 def usage():
     start, end, rows = selected(include_failures=failure_diagnostics())
     return jsonify(
+        scope=scope_context(),
         start=start,
         end=end,
         rows=rows,
@@ -132,14 +214,17 @@ def usage():
 @app.get("/statistics/api/usage/by-token")
 def usage_by_token():
     start, end, rows = selected(by_token=True, include_failures=failure_diagnostics())
-    return jsonify(start=start, end=end, rows=rows)
+    return jsonify(scope=scope_context(), start=start, end=end, rows=rows)
 
 
 @app.get("/statistics/api/usage/tokens")
 def usage_tokens():
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    kwargs = {"include_failures": True} if failure_diagnostics() else {}
+    kwargs = report_scope_kwargs()
+    if failure_diagnostics():
+        kwargs["include_failures"] = True
     return jsonify(
+        scope=scope_context(),
         start=start,
         end=end,
         rows=load_token_options(start, end, **kwargs),
@@ -149,8 +234,11 @@ def usage_tokens():
 @app.get("/statistics/api/usage/groups")
 def usage_groups():
     start, end = request.args.get("start", ""), request.args.get("end", "")
-    kwargs = {"include_failures": True} if failure_diagnostics() else {}
+    kwargs = report_scope_kwargs()
+    if failure_diagnostics():
+        kwargs["include_failures"] = True
     return jsonify(
+        scope=scope_context(),
         start=start,
         end=end,
         rows=load_group_options(start, end, **kwargs),
@@ -186,11 +274,13 @@ def usage_by_selection():
     if token_ids is None and groups is None:
         raise ValueError("请选择令牌或分组。")
     by_token = request.args.get("by_token", "0") == "1"
-    kwargs = dict(by_token=by_token, token_ids=token_ids, groups=groups)
+    kwargs = dict(
+        by_token=by_token, token_ids=token_ids, groups=groups, **report_scope_kwargs()
+    )
     if failure_diagnostics():
         kwargs["include_failures"] = True
     rows = load_report(start, end, **kwargs)
-    return jsonify(start=start, end=end, rows=rows)
+    return jsonify(scope=scope_context(), start=start, end=end, rows=rows)
 
 
 @app.get("/statistics/api/export")
@@ -198,10 +288,15 @@ def export():
     start, end, rows = selected()
     first = parse_boundary(start).strftime("%Y-%m-%d_%H-%M-%S")
     last = parse_boundary(end, end=True).strftime("%Y-%m-%d_%H-%M-%S")
+    scope = scope_context()
+    label = {"all": "全部", "ungrouped": "未分组"}.get(
+        scope["kind"], scope["tag_value"]
+    )
+    label = re.sub(r"[^\w\-\u4e00-\u9fff]", "_", label or "scope")[:80]
     return send_file(
         export_excel(rows, start, end),
         as_attachment=True,
-        download_name=f"usage_{first}_{last}.xlsx",
+        download_name=f"usage_{scope['id']}_{label}_{first}_{last}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -217,12 +312,14 @@ def monitor_write_allowed():
 
 @app.get("/statistics/api/balance/status")
 def balance_status():
-    return jsonify(balance.snapshot(live=request.args.get("live") == "1"))
+    return jsonify(
+        balance.snapshot(live=request.args.get("live") == "1", **scope_kwargs())
+    )
 
 
 @app.get("/statistics/api/balance")
 def balance_api():
-    result = balance.snapshot(live=True)
+    result = balance.snapshot(live=True, **scope_kwargs())
     if not result.get("configured") or not result.get("valid"):
         return jsonify(code=503, message="余额数据暂不可用。"), 503
     settings, state = result["settings"], result["state"]
@@ -233,6 +330,7 @@ def balance_api():
         code=0,
         data={
             "site": load_site_name(),
+            **({"scope": scope_context()} if "scope_id" in request.args else {}),
             "currency": "CNY",
             "total_quota": float(budget),
             "used_quota": float(used),
@@ -249,11 +347,15 @@ def balance_api():
 @app.get("/statistics/api/alert")
 def balance_alert_api():
     try:
-        balance.check_once(daily=False)
+        balance.check_once(daily=False, **scope_kwargs())
     except balance.CheckBusy:
         return jsonify(error="其他检查或设置保存正在进行，请稍后重试。"), 409
-    alert = notifications.current_alert_record()
-    return jsonify(has_alert=alert is not None, alert=alert)
+    alert = notifications.current_alert_record(**scope_kwargs())
+    return jsonify(
+        **({"scope": scope_context()} if "scope_id" in request.args else {}),
+        has_alert=alert is not None,
+        alert=alert,
+    )
 
 
 @app.put("/statistics/api/balance/settings")
@@ -261,7 +363,9 @@ def balance_settings():
     if not monitor_write_allowed():
         return jsonify(error="不允许的设置请求。"), 403
     try:
-        balance.save_settings(request.get_json(), request.authorization.username)
+        balance.save_settings(
+            request.get_json(), request.authorization.username, **scope_kwargs()
+        )
     except balance.SettingsConflict:
         return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
     return jsonify(saved=True)
@@ -272,7 +376,7 @@ def balance_recalculate_history_preview():
     if not monitor_write_allowed():
         return jsonify(error="不允许的追溯请求。"), 403
     try:
-        result = balance.history_preview(request.get_json())
+        result = balance.history_preview(request.get_json(), **scope_kwargs())
     except balance.SettingsConflict:
         return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
     except balance.ArchiveDataMissing:
@@ -295,6 +399,7 @@ def balance_recalculate_history():
             payload.get("settings"),
             payload.get("preview"),
             request.authorization.username,
+            **scope_kwargs(),
         )
     except balance.SettingsConflict:
         return jsonify(error="设置已被其他管理员修改，请重新打开设置。"), 409
@@ -313,7 +418,10 @@ def balance_recalculate_history():
 
 @app.get("/statistics/api/balance/usage-channels")
 def balance_usage_channels():
-    return jsonify(rows=balance.usage_channels_snapshot())
+    return jsonify(
+        **({"scope": scope_context()} if "scope_id" in request.args else {}),
+        rows=balance.usage_channels_snapshot(**scope_kwargs()),
+    )
 
 
 @app.post("/statistics/api/balance/check")
@@ -321,10 +429,10 @@ def balance_check():
     if not monitor_write_allowed():
         return jsonify(error="不允许的检查请求。"), 403
     try:
-        checked = balance.check_once(daily=False)
+        checked = balance.check_once(daily=False, **scope_kwargs())
     except balance.CheckBusy:
         return jsonify(error="其他检查或设置保存正在进行，请稍后再次点击铃铛。"), 409
-    return jsonify(balance.snapshot(live=not checked))
+    return jsonify(balance.snapshot(live=not checked, **scope_kwargs()))
 
 
 @app.errorhandler(ValueError)

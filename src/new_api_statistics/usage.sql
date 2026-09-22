@@ -8,6 +8,7 @@ WITH source AS MATERIALIZED (
            COALESCE(NULLIF(btrim(other), ''), '{}')::jsonb AS o
     FROM logs
     WHERE type = 2 AND created_at >= %(start)s AND created_at < %(end)s
+      /* scope_channels */
       AND (%(token_ids)s::bigint[] IS NULL OR token_id = ANY(%(token_ids)s::bigint[]))
       AND (%(groups)s::text[] IS NULL OR COALESCE("group", '') = ANY(%(groups)s::text[]))
 ), parts AS MATERIALIZED (
